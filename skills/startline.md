@@ -2086,6 +2086,122 @@ Wrap the section heading, subtitle, card grid, and footnote in a `<section>` wit
 
 ---
 
+### Step 5b — Multi-race additions
+
+This step appends B race summary cards and verifies C race wiring before the report is saved.
+
+#### Race Calendar Strip verification
+
+Confirm that the Section 2 Race Calendar Strip renders **all races** from `raceConfig.races`, sorted chronologically left to right. Each race entry must include:
+
+- A dot with the correct CSS class: `priority-a` (coral `#c07058`), `priority-b` (amber `#c09060`), or `priority-c` (grey `#a09080`)
+- A designation label (A / B / C) shown above the dot
+- The race name (or race type if no name was given)
+- Weeks-to-race below the dot: compute from today's date to each race's date, rounded to nearest whole week; if in the past, show "past"
+
+Update the Section 2 HTML to include the designation label. Modify the per-race template to:
+
+```html
+<div class="calendar-race">
+  <div class="calendar-designation" style="font-size:0.65rem; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:[DESIGNATION_COLOR]; margin-bottom:3px;">[DESIGNATION]</div>
+  <div class="calendar-dot priority-[a|b|c]"></div>
+  <div class="calendar-race-name">[race.name or race.raceType]</div>
+  <div class="calendar-weeks">[weeksOut] wks</div>
+</div>
+```
+
+Where `[DESIGNATION_COLOR]` maps to: A → `#c07058`, B → `#c09060`, C → `#a09080`.
+
+#### C race timeline wiring
+
+C races should already appear as scatter points on the Section 6 Training Block Timeline (dataset "C Races", amber `#c09060`, star pointStyle). Verify that for each race in `raceConfig.races` where `designation === "C"` and `date` is before today, a scatter point exists.
+
+If any past C races are present, update the Section 6 chart subtitle to append: `" · C races shown as ◆ markers"`.
+
+#### B race summary cards
+
+After the Section 8 Training Recommendation Cards, check `raceConfig.races` for any races with `designation === "B"`. For each B race (in chronological order by date), append a **B Race Summary Card** to the report body.
+
+**Card structure:**
+
+```html
+<div class="b-race-card" style="background:#faf7f2; border-left:4px solid #c09060; border-radius:12px; padding:20px 24px; margin:16px 0; max-width:860px; margin-left:auto; margin-right:auto;">
+  <!-- Header -->
+  <div style="margin-bottom:14px;">
+    <span style="font-size:0.7rem; font-weight:700; text-transform:uppercase; letter-spacing:0.08em; color:#c09060;">B Race</span>
+    <div style="font-size:1.1rem; font-weight:700; color:#2d2d2d; margin-top:4px;">[B_RACE_NAME_OR_TYPE]</div>
+    <div style="font-size:0.85rem; color:#a09080; margin-top:2px;">[B_RACE_DATE_FORMATTED] · [B_WEEKS_OUT] weeks out</div>
+  </div>
+  <!-- Key gaps -->
+  <div style="margin-bottom:14px;">
+    <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#a09080; margin-bottom:8px;">Key Gaps</div>
+    <!-- For each dimension scoring "gap" or "risk", render one line: -->
+    <!-- <div style="font-size:0.85rem; color:#2d2d2d; margin-bottom:4px;">📏 Distance: 🟡 Gap</div> -->
+    <!-- If no dimensions score gap or risk, render: -->
+    <!-- <div style="font-size:0.85rem; color:#a09080;">No significant gaps flagged for this race.</div> -->
+  </div>
+  <!-- Finish time estimate -->
+  <div style="margin-bottom:14px;">
+    <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:#a09080; margin-bottom:6px;">Estimated Finish</div>
+    <div style="font-size:1rem; color:#2d2d2d;">~[B_RACE_ESTIMATED_TIME] <span style="font-size:0.8rem; color:#a09080;">(based on A race analysis)</span></div>
+  </div>
+  <!-- Footer note -->
+  <div style="font-size:0.78rem; color:#a09080; font-style:italic; border-top:1px solid #e8e0d4; padding-top:10px; margin-top:4px;">
+    For full analysis of this race, run <code>/startline</code> with this race as your A race.
+  </div>
+</div>
+```
+
+**Header values:**
+- `[B_RACE_NAME_OR_TYPE]` — `race.name` if provided, otherwise `race.raceType`
+- `[B_RACE_DATE_FORMATTED]` — the B race date formatted as "Month D, YYYY" (e.g., "July 12, 2026")
+- `[B_WEEKS_OUT]` — integer weeks from today to the B race date
+
+**Key gaps (compact one-line summaries):**
+
+Iterate over the five gap dimensions in `gapScores`: `distance`, `elevation`, `terrain`, `intensity`, `temperature`. For each dimension where `status === "gap"` or `status === "risk"`, render a single line using this format:
+
+| Dimension | Icon | Status → label |
+|---|---|---|
+| distance | 📏 | gap → `🟡 Gap`, risk → `🔴 Risk` |
+| elevation | ⛰️ | gap → `🟡 Gap`, risk → `🔴 Risk` |
+| terrain | 🌲 | gap → `🟡 Gap`, risk → `🔴 Risk` |
+| intensity | ⚡ | gap → `🟡 Gap`, risk → `🔴 Risk` |
+| temperature | 🌡️ | gap → `🟡 Gap`, risk → `🔴 Risk` |
+
+Capitalize the dimension name (e.g., "Distance", "Elevation"). Show only dimensions with `gap` or `risk` status — omit `on_track` and `null`/skipped dimensions.
+
+**Finish time estimate:**
+
+Derive a light finish time estimate for the B race by adjusting the A race predicted finish time from `finishPrediction.predicted` (the midpoint of the prediction range). Apply the following rules:
+
+1. **B race is shorter than A race** — compute the ratio `bRaceDistance / aRaceDistance`. Apply Daniels VDOT-equivalent scaling for running, or power-to-time scaling for cycling. As a reasonable approximation for all sports:
+   - Ratio < 0.5: multiply A race time by `ratio × 1.08` (shorter events are disproportionately faster)
+   - Ratio 0.5–0.85: multiply A race time by `ratio × 1.05`
+   - Ratio > 0.85: multiply A race time by `ratio × 1.02`
+2. **B race is longer than A race** — compute `excessRatio = (bRaceDistance - aRaceDistance) / aRaceDistance`. Scale up: multiply A race time by `(bRaceDistance / aRaceDistance) × (1 + 0.05 × (excessRatio / 0.2))`.
+3. Format the result as `H:MM:SS` (e.g., `1:52:30`). If the estimate is under 60 minutes, format as `M:SS`.
+
+If `finishPrediction` is unavailable, display: "Estimate unavailable — insufficient A race data."
+
+Use `raceConfig.primaryRace.distance` (in miles) as the A race distance and `race.distance` (in miles) as the B race distance.
+
+#### Section order confirmation
+
+The final HTML report body must contain sections in this order:
+
+1. **Header** — A race name, sport, race type, date, days out
+2. **Race Calendar Strip** — all races (A, B, C) with designation labels, sorted chronologically
+3. **Hero Metrics** — readiness %, finish window, confidence (A race)
+4. **Radar Chart** — gap dimensions (A race)
+5. **Gap Analysis** — detailed gap rows (A race)
+6. **Training Block Timeline** — weekly volume chart with phase transitions and C race markers
+7. **Elevation Profile Overlay** — race course vs. longest training effort
+8. **Training Recommendation Cards** — prioritized action cards (A race)
+9. **B Race Summary Cards** — one card per B race, in chronological order by date
+
+---
+
 ### Step 6 — Save and confirm
 
 After writing the file, tell the athlete:

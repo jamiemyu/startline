@@ -1,0 +1,9 @@
+{
+  "name": "startline",
+  "description": "Race readiness analysis for endurance athletes — gap scoring, finish time prediction, and HTML reports",
+  "version": "0.1.0",
+  "author": {
+    "name": "Jamie Yu"
+  },
+  "keywords": ["endurance", "running", "cycling", "mtb", "race", "training", "garmin"]
+}

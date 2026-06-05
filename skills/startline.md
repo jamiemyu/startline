@@ -52,20 +52,20 @@ Work from `filteredActivities` for all calculations in this step.
 
 **Step 2a — Longest single effort.**
 Find the activity with the highest `distance` value. Record:
-- `distance`: the distance value in km (convert from meters if necessary: divide by 1000)
+- `distance`: the distance value in miles (convert from meters if necessary: divide by 1609.344)
 - `duration`: the activity's elapsed time formatted as `HH:MM:SS`
 - `date`: the activity start date in ISO format (`YYYY-MM-DD`)
 
 Store as `longestEffort`.
 
 **Step 2b — Top-3 long efforts average.**
-Sort `filteredActivities` by `distance` descending. Take the top 3. Compute the arithmetic mean of their `distance` values (in km). Store as `top3Average` (a single number, rounded to 2 decimal places).
+Sort `filteredActivities` by `distance` descending. Take the top 3. Compute the arithmetic mean of their `distance` values (in miles). Store as `top3Average` (a single number, rounded to 2 decimal places).
 
 If fewer than 3 activities exist, average however many are available. If zero activities, set `top3Average` to `null`.
 
 **Step 2c — Weekly volume trend.**
 Group `filteredActivities` by ISO week (format: `YYYY-Www`, e.g. `2025-W03`). For each week:
-- Sum the `distance` values of all activities in that week (in km)
+- Sum the `distance` values of all activities in that week (in miles)
 - Count the number of activities
 
 Produce an array of objects `{ week, totalDistance, activityCount }` sorted oldest-to-newest. Store as `weeklyTrend`.
@@ -79,12 +79,12 @@ Weeks with zero activities are omitted (sparse weeks produce gaps, not zero-rows
 Continue working from `filteredActivities`.
 
 **Step 3a — Average elevation per long effort.**
-Take the same top-3 activities identified in Step 2b (by distance). Compute the arithmetic mean of their `elevationGain` values (in meters). Store as `avgElevationPerLongEffort`.
+Take the same top-3 activities identified in Step 2b (by distance). Compute the arithmetic mean of their `elevationGain` values (in feet). Store as `avgElevationPerLongEffort`.
 
 If elevation data is missing for an activity, treat it as 0 for averaging purposes. If zero activities, set to `null`.
 
 **Step 3b — Cumulative block elevation gain.**
-Sum `elevationGain` across all activities in `filteredActivities`. Store as `cumulativeBlockElevation` (meters).
+Sum `elevationGain` across all activities in `filteredActivities`. Store as `cumulativeBlockElevation` (feet).
 
 ---
 
@@ -134,18 +134,18 @@ Assemble the following `garminMetrics` object and hold it in your working contex
   "sparseHistory": <true | false>,
   "volume": {
     "longestEffort": {
-      "distance": <km, number>,
+      "distance": <miles, number>,
       "duration": "<HH:MM:SS>",
       "date": "<YYYY-MM-DD>"
     },
-    "top3Average": <km, number | null>,
+    "top3Average": <miles, number | null>,
     "weeklyTrend": [
-      { "week": "<YYYY-Www>", "totalDistance": <km>, "activityCount": <n> }
+      { "week": "<YYYY-Www>", "totalDistance": <miles>, "activityCount": <n> }
     ]
   },
   "elevation": {
-    "avgPerLongEffort": <meters, number | null>,
-    "cumulativeBlockGain": <meters, number>
+    "avgPerLongEffort": <feet, number | null>,
+    "cumulativeBlockGain": <feet, number>
   },
   "physiological": {
     "vo2maxEstimate": <number | null>,
@@ -157,8 +157,8 @@ Assemble the following `garminMetrics` object and hold it in your working contex
 ```
 
 Rules for assembly:
-- All distance values must be in **km** (not meters, not miles). Convert if the Garmin API returns a different unit.
-- All elevation values must be in **meters**.
+- All distance values must be in **miles**. Convert if the Garmin API returns a different unit (divide meters by 1609.344).
+- All elevation values must be in **feet**. Convert if the Garmin API returns meters (multiply by 3.28084).
 - If any physiological field is unavailable, set it to `null` — never halt or ask the user to provide it manually.
 - `activitiesAnalyzed` is the count of `filteredActivities` (after sport-type filtering), not the raw fetch count.
 

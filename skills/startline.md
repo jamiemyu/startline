@@ -1298,7 +1298,124 @@ Then proceed to Module 7.
 ---
 
 ## Module 7: Readiness % Aggregation
-*(Implemented in issue #12 — placeholder)*
+
+### Step 1 — Collect gap scores
+
+Retrieve from working context:
+- `gapScores.distance` — score + skipped flag
+- `gapScores.elevation` — score + skipped flag
+- `gapScores.terrain` — score + skipped flag
+- `gapScores.intensity` — score + skipped flag
+- `gapScores.temperature` — score + skipped flag
+- `prediction.confidencePct` — from Module 6
+
+For each dimension, convert the score to a numeric value:
+- `"on_track"` → 100
+- `"gap"` → 60
+- `"risk"` → 20
+- `null` / `skipped: true` → excluded from aggregation (weight redistributed)
+
+---
+
+### Step 2 — Look up default dimension weights
+
+Weights are sport × race-type specific. Use this table:
+
+| Sport | Race type | Distance | Elevation | Terrain | Intensity | Temperature |
+|---|---|---|---|---|---|---|
+| `running` | `mile` | 0.05 | 0.05 | 0.10 | 0.60 | 0.20 |
+| `running` | `5k` | 0.05 | 0.05 | 0.10 | 0.60 | 0.20 |
+| `running` | `10k` | 0.15 | 0.10 | 0.10 | 0.50 | 0.15 |
+| `running` | `half_marathon` | 0.25 | 0.15 | 0.10 | 0.35 | 0.15 |
+| `running` | `marathon` | 0.35 | 0.15 | 0.05 | 0.35 | 0.10 |
+| `running` | `ultra` | 0.30 | 0.25 | 0.20 | 0.15 | 0.10 |
+| `road_cycling` | `criterium` | 0.05 | 0.05 | 0.00 | 0.70 | 0.20 |
+| `road_cycling` | `gran_fondo` | 0.25 | 0.30 | 0.00 | 0.35 | 0.10 |
+| `road_cycling` | `century` | 0.30 | 0.25 | 0.00 | 0.35 | 0.10 |
+| `mtb` | `xco` | 0.10 | 0.15 | 0.25 | 0.40 | 0.10 |
+| `mtb` | `enduro` | 0.15 | 0.20 | 0.30 | 0.25 | 0.10 |
+
+Note: road cycling terrain weight is always 0.00 since that dimension is skipped for road cycling.
+
+---
+
+### Step 3 — Redistribute weights for missing/skipped dimensions
+
+For any dimension where `score === null` or `skipped === true`, set its weight to 0 and redistribute that weight proportionally among the remaining scored dimensions.
+
+Algorithm:
+1. Start with the default weight table for this sport × race type
+2. For each skipped/null dimension, remove its weight from the pool
+3. Sum the remaining weights
+4. Divide each remaining weight by the sum to renormalize (so all weights sum to 1.0)
+
+Track which dimensions were included/excluded in `includedDimensions` and `excludedDimensions` arrays.
+
+---
+
+### Step 4 — Compute Readiness %
+
+`readinessPct = sum(dimensionScore × normalizedWeight)` for all included dimensions.
+
+Round to the nearest integer.
+
+---
+
+### Step 5 — Training consistency modifier
+
+Compute the coefficient of variation (CV) of weekly training volume:
+- Use `garminMetrics.volume.weeklyTrend` array from working context
+- CV = (standard deviation of weekly distances) / (mean of weekly distances) × 100
+
+Compare to sport × race-type benchmarks:
+
+| Sport | Race type | Ideal CV threshold |
+|---|---|---|
+| `running` | `marathon` | < 20% |
+| `running` | `5k` / `10k` / `half_marathon` | < 25% |
+| `running` | `ultra` | < 30% |
+| `road_cycling` | `gran_fondo` / `century` | < 25% |
+| `road_cycling` | `criterium` | < 30% |
+| `mtb` | `xco` / `enduro` | < 30% |
+
+**High inconsistency behavior:**
+- CV within threshold: no adjustment
+- CV 1–1.5× threshold: add note "Training volume has been somewhat inconsistent — this widens the prediction range slightly." and reduce `prediction.confidencePct` by 5 percentage points.
+- CV > 1.5× threshold: add note "Training volume has been highly inconsistent — prediction confidence interval is wider than usual." and reduce `prediction.confidencePct` by 10 percentage points.
+
+**The Readiness % itself is NOT changed** by consistency. Consistency only widens the prediction confidence interval. After applying any reduction, re-clamp `prediction.confidencePct` to the range 20–90%.
+
+---
+
+### Step 6 — Store result
+
+Store the following as `readiness` in working context:
+
+```json
+{
+  "readinessPct": <0-100>,
+  "dimensionWeights": {
+    "distance": <0-1>,
+    "elevation": <0-1>,
+    "terrain": <0-1>,
+    "intensity": <0-1>,
+    "temperature": <0-1>
+  },
+  "includedDimensions": ["distance", "elevation", "intensity"],
+  "excludedDimensions": ["terrain", "temperature"],
+  "consistencyCV": <number>,
+  "consistencyBenchmark": <number>,
+  "consistencyNote": "<string>" | null
+}
+```
+
+Also update `prediction.confidencePct` if the consistency modifier applies (re-clamp to 20–90%).
+
+Notify the athlete:
+
+> "📊 Readiness: **[readinessPct]%** (based on [N] of 5 dimensions — [excluded list] not available). [consistencyNote if any]"
+
+Then proceed to Module 8.
 
 ---
 

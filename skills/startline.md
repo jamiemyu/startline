@@ -525,7 +525,127 @@ When `terrainEstimated` is `true`, add a note to the terrain dimension in the ga
 ---
 
 ## Module 4: Training Block Detection
-*(Implemented in issue #5 — placeholder)*
+
+This module auto-detects the athlete's current training block and phase — no manual date entry required. Follow every step in order.
+
+---
+
+### Step 1 — Attempt TrainingPeaks detection (higher confidence)
+
+Call `mcp__trainingpeaks__tp_get_fitness`. If the call errors with "not connected", the tool does not exist, or any connection-related error occurs, skip immediately to Step 2.
+
+**If TrainingPeaks is available:**
+
+Call both of the following:
+- `mcp__trainingpeaks__tp_get_fitness` — to get CTL/ATL/TSB history
+- `mcp__trainingpeaks__tp_get_atp` — to get training plan structure and phase labels
+
+**Detect the training block start date:**
+Scan the CTL history for the last 20 weeks. Find the earliest date where CTL was at a local minimum before a consistent sustained rise — this is the block start date. A "local minimum" is a point where CTL stopped declining and began rising for at least 2 consecutive weeks thereafter.
+
+**Detect phase transitions** by examining the CTL/ATL/TSB curves in order. Apply these rules:
+
+| Transition | Signal |
+|---|---|
+| Base → Build | CTL rising AND ATL spikes relative to CTL (intensity increasing) |
+| Build → Peak | CTL plateauing (rate of rise near zero) AND high-intensity work concentrated |
+| Peak → Taper | CTL dropping intentionally AND ATL falling faster than CTL |
+
+Walk the history chronologically and record the date of each transition that is observed. Do not fabricate transitions not supported by the data.
+
+Set `confidence: "high"` and `source: "trainingpeaks"`.
+
+Skip Step 2 and proceed directly to Step 3.
+
+---
+
+### Step 2 — Garmin-only detection (medium confidence)
+
+Use the `garminMetrics.volume.weeklyTrend` array already computed in Module 2 (it is in working context).
+
+**Detect block start date:**
+Walk the `weeklyTrend` array from oldest to newest across the trailing 16 weeks. Find the earliest week where weekly volume began a sustained upward trend. "Sustained" means at least 3 consecutive weeks of non-decreasing volume. Use the start date of that first week as the block start date.
+
+If no clear upward trend exists (no 3-consecutive-week non-decreasing run is found), default to 12 weeks before today as the block start date.
+
+**Detect current phase** using these heuristics. Apply in order and use the first match:
+
+| Phase | Condition |
+|---|---|
+| **Taper** | Last 2 weeks show volume drop ≥ 25% from the prior 4-week average |
+| **Peak** | Weekly volume is within 10% of the 4-week max AND race is ≤ 6 weeks away |
+| **Build** | Last 4 weeks average volume > prior 4 weeks average AND race is > 6 weeks away |
+| **Base** | Default if none of the above match |
+
+Use `raceConfig.weeksToRace` (from Module 1 working context) for the "weeks away" comparisons.
+
+**Detect phase transitions:**
+Walk the `weeklyTrend` array week by week from oldest to newest. At each week, apply the same four-rule heuristic above (using the data available up to that week). Record the week where each phase transition occurs — i.e., where the detected phase changes from the previously detected phase. Store only transitions that are actually observed.
+
+**Set confidence:**
+- If `garminMetrics.weeksWithData` ≥ 8: set `confidence: "medium"`
+- If `garminMetrics.weeksWithData` < 8: set `confidence: "low"`
+
+Set `source: "garmin"`.
+
+---
+
+### Step 3 — Surface to athlete for confirmation
+
+Format the block start date as a human-readable date (e.g., "Apr 14"). Format today's date the same way. Present a single confirmation message:
+
+> "Detected training block: **[start date] – [today]** (currently in **[current phase] phase**). Does this look right?"
+
+If confidence is `"medium"` or `"low"`, append to the message:
+
+> "(estimated from Garmin load trends)"
+
+Wait for the athlete's response:
+
+**If confirmed** (athlete says "yes", "looks right", "correct", "yep", "sure", or any clear affirmative): proceed to Step 4 with no changes.
+
+**If adjustment requested**: accept any correction the athlete provides. Examples:
+- "The block started in March" → update `startDate` to the athlete's stated date (parse as `YYYY-MM-DD`)
+- "I'm in peak phase" → update `currentPhase` to the athlete's stated phase
+- A combination of both → apply both corrections
+
+After applying the corrections, re-confirm in a single message:
+
+> "Updated: block start **[new start date]**, currently in **[new phase] phase**. Proceeding."
+
+Then proceed to Step 4.
+
+---
+
+### Step 4 — Store trainingBlock
+
+Assemble the following `trainingBlock` object and store it in working context:
+
+```json
+{
+  "startDate": "YYYY-MM-DD",
+  "currentPhase": "Base" | "Build" | "Peak" | "Taper",
+  "phaseTransitions": [
+    { "phase": "Base", "startDate": "YYYY-MM-DD" },
+    { "phase": "Build", "startDate": "YYYY-MM-DD" }
+  ],
+  "confidence": "high" | "medium" | "low",
+  "source": "trainingpeaks" | "garmin"
+}
+```
+
+**Field rules:**
+- `startDate` — the confirmed block start date (ISO 8601 format)
+- `currentPhase` — the confirmed current phase: exactly one of `Base`, `Build`, `Peak`, `Taper`
+- `phaseTransitions` — chronological array of phase-start events actually detected in the data. Include only phases that were observed. Do not fabricate transitions.
+- `confidence` — as set in Step 1 or Step 2 (athlete corrections do not change the confidence level)
+- `source` — `"trainingpeaks"` if Step 1 succeeded, `"garmin"` if Step 2 was used
+
+**Notify the athlete:**
+
+> "Training block confirmed: **[currentPhase]** phase, started **[startDate formatted as Month D, YYYY]**. Moving to gap analysis..."
+
+Then proceed immediately to Module 5.
 
 ---
 

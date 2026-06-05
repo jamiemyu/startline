@@ -892,7 +892,97 @@ Display one line: e.g. "⛰️ Elevation: 🔴 Risk — avg 800 ft/long run, rac
 ---
 
 ### 5c. Terrain Gap
-*(Implemented in issue #7 — placeholder)*
+
+**Inputs:**
+- `raceConfig.primaryRace.sport` and `.raceType`
+- `courseData.tier`, `courseData.gradeVariabilityIndex` (null if Tier 3 / manual)
+- `courseData.terrainEstimated` — true if Tier 3 manual entry
+- `garminMetrics` — full object from Module 2 (activity list with type labels)
+- Strava MCP tools (optional — check availability)
+
+---
+
+**Road Cycling — skip terrain dimension**
+
+If `sport === "road_cycling"`: terrain is handled entirely by the elevation dimension.
+
+Store:
+```json
+{ "score": null, "skipped": true, "reason": "Terrain not applicable for road cycling — see elevation gap." }
+```
+Display: "🏔️ Terrain: *N/A — road cycling terrain is captured in the elevation dimension.*"
+Proceed to 5d.
+
+---
+
+**MTB — Grade Variability Index method**
+
+If `courseData.gradeVariabilityIndex` is available (Tier 1 or 2 course data):
+
+1. Pull FIT data for the athlete's MTB activities from the last 16 weeks. For each activity where `activityType` is `mtb` / `mountain_biking` / `MTB` / `Mountain Bike Ride`, call `mcp__garmin__get_activity_fit_data` with `activityId` and note the GVI if already computed, OR compute GVI from the raw records:
+   - Walk GPS coordinate records in 50-meter segments
+   - For each segment: grade = elevation_change_meters / horizontal_distance_meters × 100
+   - Standard deviation of all segment grades = GVI for that activity
+2. Average the GVI across all MTB activities analyzed → `trainingGVI`
+3. Compare to `courseData.gradeVariabilityIndex` → `raceGVI`
+
+Score by `raceGVI / trainingGVI` ratio:
+- ≤ 1.3 → 🟢 On Track
+- 1.3–2.0 → 🟡 Gap
+- > 2.0 → 🔴 Risk
+
+If `courseData.gradeVariabilityIndex` is null (Tier 3 manual entry or no GPS data), fall back to race-type defaults:
+- XCO: `raceGVI` default = 8.0 (high technical)
+- Enduro: `raceGVI` default = 12.0 (very high technical)
+
+If `trainingGVI` is also unavailable (no FIT data returned), use activity type labels as a proxy: if ≥ 50% of training rides are labeled MTB/Trail → assume `trainingGVI` = 6.0 (moderate technical); otherwise → 3.0 (low technical).
+
+Apply same ratio thresholds. Set `method: "gvi_default"` in result to flag that defaults were used.
+
+---
+
+**Running — label + Strava surface method**
+
+1. From `garminMetrics` activity list, count runs labeled `Trail Run` vs `Run` (or equivalent labels).
+   - `trailRunPct = trailRunCount / totalRunCount`
+
+2. If Strava MCP is available, attempt `mcp__strava-mcp__list_activities` for recent runs and look for surface tags (paved / unpaved / gravel / trail). Average surface type → `stravaSurfaceType`.
+
+3. Determine race terrain type from `courseData`:
+   - If course was GPX/Strava Tier 1/2: infer from GVI — GVI < 3 → road, GVI 3–6 → mixed, GVI > 6 → trail
+   - If Tier 3 manual: use `raceType` as proxy — `marathon`/`10k`/`half_marathon` → road; `ultra` → trail (ask athlete to confirm if ambiguous)
+
+4. Score terrain match:
+
+| Race terrain | Athlete trail run % | Score |
+|---|---|---|
+| Road | Any | 🟢 On Track (road runners always fine on road) |
+| Mixed / Trail | ≥ 60% trail runs | 🟢 On Track |
+| Mixed / Trail | 30–60% trail runs | 🟡 Gap |
+| Mixed / Trail | < 30% trail runs | 🔴 Risk |
+
+Set `method: "label_based"` in result.
+
+---
+
+**Result object**
+
+Store as `gapScores.terrain`:
+```json
+{
+  "score": "on_track" | "gap" | "risk" | null,
+  "skipped": false,
+  "sport": "<sport>",
+  "method": "gvi_measured" | "gvi_default" | "label_based" | null,
+  "trainingGVI": <number | null>,
+  "raceGVI": <number | null>,
+  "trailRunPct": <0-1 | null>,
+  "raceTerrainType": "road" | "mixed" | "trail" | null,
+  "reason": null
+}
+```
+
+Display one line: e.g. "🌲 Terrain: 🟡 Gap — 25% of your runs are trail/unpaved, race is trail terrain."
 
 ---
 

@@ -650,7 +650,118 @@ Then proceed immediately to Module 5.
 ---
 
 ## Module 5: Gap Analysis
-*(Implemented in issues #6–#10 — placeholder)*
+
+This module scores the gap between the athlete's training and race demands across five dimensions. Each dimension produces a score: 🟢 On Track / 🟡 Gap / 🔴 Risk.
+
+Work through each sub-section in order. Store all results in a `gapScores` object.
+
+---
+
+### 5a. Distance Gap
+*(Implemented in issue #6 — placeholder)*
+
+---
+
+### 5b. Elevation Gap
+*(Implemented in issue #6 — placeholder)*
+
+---
+
+### 5c. Terrain Gap
+*(Implemented in issue #7 — placeholder)*
+
+---
+
+### 5d. Intensity Gap
+*(Implemented in issue #8 — placeholder)*
+
+---
+
+### 5e. Temperature Gap
+
+#### Step 1 — Check race proximity
+
+Compute `daysToRace` from `raceConfig.daysToRace` (already in working context).
+
+**If `daysToRace > 10`:**
+- Skip the temperature dimension entirely
+- Store `gapScores.temperature = { score: null, skipped: true, reason: "Weather analysis available closer to race day (race is more than 10 days out)" }`
+- Display to athlete: "🌡️ Temperature: *Weather analysis available closer to race day.*"
+- Proceed to the next gap dimension.
+
+**If `daysToRace <= 10`:** continue to Step 2.
+
+#### Step 2 — Get race location
+
+Check `raceConfig.primaryRace` for a location field. If none exists, ask:
+> "What city or region is the race in? (Used for race day weather forecast.)"
+
+Store the response as `raceLocation`.
+
+#### Step 3 — Fetch race day forecast
+
+Call the Open-Meteo API via a Bash command or WebFetch.
+
+First, geocode the city using the Open-Meteo geocoding API:
+```
+https://geocoding-api.open-meteo.com/v1/search?name={CITY}&count=1&language=en&format=json
+```
+
+Extract `latitude` and `longitude` from the first result, then fetch the forecast:
+```
+https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&daily=temperature_2m_max,temperature_2m_min&temperature_unit=fahrenheit&forecast_days=10&timezone=auto
+```
+
+Find the forecast entry matching the race date. Extract `temperature_2m_max` and `temperature_2m_min` for that day. Compute `raceDayTempF = (max + min) / 2`.
+
+**If the API call fails or returns no data:**
+- Store `gapScores.temperature = { score: null, skipped: true, reason: "Weather data unavailable" }`
+- Display: "🌡️ Temperature: *Weather data unavailable — temperature dimension skipped.*"
+- Proceed to next dimension.
+
+#### Step 4 — Get training temperature
+
+From `garminMetrics` (already in working context), the activities array contains weather data on many activities. Look for an `averageTemperature` or `temperature` field on each activity.
+
+Average the temperature values across activities in the last 4 weeks (use only activities where temperature data is present). Convert to Fahrenheit if values appear to be in Celsius (values < 50 when racing in a warm climate are likely Celsius — multiply by 9/5 + 32).
+
+Store as `trainingAvgTempF`.
+
+**If no temperature data is available in Garmin activities:** set `trainingAvgTempF = null` and skip scoring (store `score: null, reason: "No training temperature data in Garmin activities"`).
+
+#### Step 5 — Score the temperature gap
+
+Compute `tempDeltaF = raceDayTempF - trainingAvgTempF` (positive = racing hotter than training).
+
+Apply these thresholds:
+
+| Condition | Score |
+|---|---|
+| `abs(tempDeltaF) <= 10°F` | 🟢 On Track |
+| `tempDeltaF` between 10–20°F warmer OR 10–20°F cooler | 🟡 Gap |
+| `tempDeltaF > 20°F` warmer OR `< -20°F` cooler | 🔴 Risk |
+
+Heat exposure (racing significantly hotter than training) is more penalized than cold exposure — racing in the cold is generally less impactful on performance.
+
+#### Step 6 — Store result
+
+```json
+{
+  "score": "on_track" | "gap" | "risk" | null,
+  "skipped": false,
+  "trainingAvgTempF": "<number | null>",
+  "raceDayTempF": "<number | null>",
+  "tempDeltaF": "<number | null>",
+  "raceLocation": "<city>",
+  "reason": null
+}
+```
+
+Display one line to athlete: e.g. "🌡️ Temperature: 🟡 Gap — training avg 52°F, race day forecast 74°F (+22°F)."
+
+---
+
+Once all gap dimensions are scored, assemble the final `gapScores` object and proceed to Module 6: Performance Prediction.
 
 ---
 

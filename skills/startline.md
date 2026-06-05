@@ -990,7 +990,120 @@ Once all gap dimensions are scored, assemble the final `gapScores` object and pr
 ---
 
 ## Module 6: Performance Prediction
-*(Implemented in issue #11 — placeholder)*
+
+**Output:** a finish time range (e.g., "3:48–4:06") plus a confidence score (e.g., 61%).
+
+---
+
+### Step 1 — Collect prediction inputs (layered by weight)
+
+Work through each input tier in order. Collect all available inputs — you will weight them in Step 3.
+
+**Tier 1 — Recent full-effort race results (highest weight)**
+From `garminMetrics.filteredActivities`, find activities flagged as races (look for `isRace: true`, activity name containing "race" / "marathon" / "5K" etc., or activity type = "RACE"). For each:
+- Extract `distance`, `duration`, `date`
+- Compute pace: `minutesPerMile = duration_minutes / distance_miles`
+- Only include results from the last 18 months
+- Label as `tier: "race_result"`
+
+**Tier 2 — C race results (included at 60% weight)**
+From `raceConfig.races`, find C-designation races whose dates are in the past. Fetch their Garmin activities (match by date ± 1 day). Extract same fields. Label as `tier: "c_race"`.
+
+**Tier 3 — Key workout performance**
+From `garminMetrics.filteredActivities`, find quality sessions:
+- Tempo runs/rides: activities where >20% of time was in Z3-Z4
+- Interval sessions: activities with high Z4-Z5 time AND short duration (<90 min)
+- Extract best sustained pace/power over 20–60 min efforts
+- Label as `tier: "key_workout"`
+
+**Tier 4 — HR-based aerobic efficiency**
+From recent activities, find efforts at a known HR. Compute pace or power at the athlete's aerobic threshold HR (approximately 75–80% of max HR; estimate max HR as 220 - age if not available from Garmin, or use the highest HR seen in Garmin data × 1.05).
+Compute `aerobicEfficiency = pace_or_power_at_threshold_HR`.
+Label as `tier: "aerobic_efficiency"`.
+
+**Tier 5 — TrainingPeaks CTL (fitness ceiling proxy)**
+If `tpEnrichment?.available`: use `tpEnrichment.currentCTL` as a fitness ceiling.
+- For running: CTL > 80 → capable of strong marathon; CTL > 50 → capable of half marathon
+- For cycling: CTL > 100 → strong gran fondo capability
+Label as `tier: "ctl_ceiling"`.
+
+---
+
+### Step 2 — Apply Grade Adjusted Pace (GAP) elevation correction
+
+If `courseData.elevationProfileArray` is available (Tier 1 or 2 course data):
+
+1. Compute the athlete's flat-equivalent pace from training data (use aerobic efficiency or key workout paces on flat/rolling terrain — activities with < 500 ft elevation gain)
+2. Apply GAP correction for the race course elevation profile:
+   - Use standard GAP formula: for every 1% grade increase, add ~10 sec/mile to pace (Strava's published GAP approximation)
+   - Walk `courseData.elevationProfileArray` segment by segment; compute grade per segment; apply pace adjustment
+   - Sum adjusted time across all segments → `gapAdjustedPrediction`
+
+If no elevation profile (Tier 3 manual entry): use total elevation gain heuristic — for every 1,000 ft of gain, add ~8–12 min for running, ~15–20 min for cycling.
+
+---
+
+### Step 3 — Compute weighted prediction
+
+Assign weights to available inputs:
+
+| Tier | Weight |
+|---|---|
+| Race result (< 6 months old) | 1.0 |
+| Race result (6–18 months old) | 0.7 |
+| C race result | 0.6 |
+| Key workout performance | 0.5 |
+| Aerobic efficiency | 0.4 |
+| CTL ceiling (TP) | 0.3 |
+
+For each input, derive an implied finish time for the target race distance using standard equivalency tables (e.g., for running: Daniels' VDOT equivalency — a 20-min 5K implies ~4:20 marathon pace; for cycling: FTP-based power-to-time estimates).
+
+Compute the weighted average of all implied finish times → `predictedFinishTime`.
+
+---
+
+### Step 4 — Compute confidence score and widen range
+
+Start with base confidence of 80%. Apply modifiers to widen the range (reduce confidence):
+
+| Modifier | Confidence reduction |
+|---|---|
+| Sparse Garmin history (< 4 weeks) | −25% |
+| No race results available (Tiers 1+2 both empty) | −20% |
+| Only C race results (no full-effort A/B race results) | −10% |
+| Training inconsistency (from `garminMetrics` CV > benchmark) | −10% |
+| Large elevation mismatch (race elevation > 2× training avg) | −10% |
+| No GPX/course file (Tier 3 manual entry) | −10% |
+| CTL available from TrainingPeaks | +5% (increases confidence) |
+| Multiple recent race results (≥ 2 within 12 months) | +5% |
+
+Clamp final confidence between 20% and 90%.
+
+**Range width**: the range is `predictedFinishTime ± margin`. Margin = `predictedFinishTime × (1 - confidence/100) × 0.15`. So a 60% confidence prediction has a wider range than an 85% confidence one.
+
+Round the range to nearest minute. E.g., if predicted = 3:57 and margin = ±9 min → range is "3:48–4:06".
+
+---
+
+### Step 5 — Store result
+
+Store the following as `prediction` in working context:
+
+```json
+{
+  "predictedFinishTime": "H:MM:SS",
+  "rangeLow": "H:MM:SS",
+  "rangeHigh": "H:MM:SS",
+  "confidencePct": "<20-90>",
+  "inputsUsed": ["race_result", "key_workout", "..."],
+  "modifiersApplied": ["No race results: -20%", "..."],
+  "gapAdjusted": true
+}
+```
+
+Notify the athlete: "🏁 Prediction: **[rangeLow]–[rangeHigh]** ([confidencePct]% confidence). Proceeding to readiness score..."
+
+Then proceed to Module 7.
 
 ---
 

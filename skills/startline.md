@@ -1550,6 +1550,19 @@ Use this HTML template structure:
     .radar-wrapper canvas { max-width: 400px; max-height: 400px; }
     .radar-na { font-size: 0.85rem; color: #a09080; text-align: center; margin-top: 12px; }
 
+    /* Section 6 — Training Block Timeline */
+    .timeline-header { margin-bottom: 6px; }
+    .timeline-title { font-weight: 700; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: #a09080; }
+    .timeline-subtitle { font-size: 0.82rem; color: #a09080; margin-top: 4px; margin-bottom: 18px; }
+    .timeline-chart-wrapper { position: relative; height: 260px; }
+
+    /* Section 7 — Elevation Profile Overlay */
+    .elevation-header { margin-bottom: 6px; }
+    .elevation-title { font-weight: 700; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: #a09080; }
+    .elevation-subtitle { font-size: 0.82rem; color: #a09080; margin-top: 4px; margin-bottom: 18px; }
+    .elevation-chart-wrapper { position: relative; height: 260px; }
+    .elevation-unavailable { font-size: 0.9rem; color: #a09080; padding: 8px 0; }
+
     /* Section 5 — Gap Analysis */
     .gap-title { font-weight: 700; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: #a09080; margin-bottom: 16px; }
     .gap-row { display: flex; align-items: center; gap: 16px; padding: 14px 0; border-bottom: 1px solid #e4ddd6; }
@@ -1662,6 +1675,41 @@ Use this HTML template structure:
     -->
   </div>
 
+  <!-- Section 6: Training Block Timeline -->
+  <div class="card">
+    <div class="timeline-header">
+      <div class="timeline-title">Training Block Timeline</div>
+      <!-- subtitle: "Block start: [trainingBlock.startDate formatted as "Mon D, YYYY"] · Current phase: [trainingBlock.currentPhase]" -->
+      <div class="timeline-subtitle">Block start: [BLOCK_START_DATE] · Current phase: [CURRENT_PHASE]</div>
+    </div>
+    <div class="timeline-chart-wrapper">
+      <canvas id="timelineChart"></canvas>
+    </div>
+  </div>
+
+  <!-- Section 7: Elevation Profile Overlay -->
+  <div class="card">
+    <div class="elevation-header">
+      <div class="elevation-title">Course vs. Training Elevation Profile</div>
+      <!--
+        If courseData.elevationProfileAvailable === false:
+          render only the .elevation-unavailable message below; omit canvas and subtitle entirely.
+        Otherwise:
+          render subtitle and canvas.
+      -->
+      <!-- subtitle (when available): "Race: [totalElevationGain] ft gain · Training effort: [longestEffort elevation] ft gain" -->
+      <div class="elevation-subtitle">Race: [RACE_ELEV_GAIN] ft gain · Training effort: [EFFORT_ELEV_GAIN] ft gain</div>
+    </div>
+    <!-- Tier 3 / no elevation data: -->
+    <!--
+    <div class="elevation-unavailable">Elevation overlay not available — course data was entered manually.</div>
+    -->
+    <!-- When elevation profile is available: -->
+    <div class="elevation-chart-wrapper">
+      <canvas id="elevationChart"></canvas>
+    </div>
+  </div>
+
   <script>
     // Build radar chart from included dimensions only
     // Map status to numeric score: on_track=100, gap=60, risk=20
@@ -1694,6 +1742,213 @@ Use this HTML template structure:
           }
         },
         plugins: { legend: { display: false } }
+      }
+    });
+
+    // ── Section 6: Training Block Timeline ──────────────────────────────
+    //
+    // weeklyTrend: garminMetrics.volume.weeklyTrend  →  [{ week, totalDistance, activityCount }, ...]
+    //   • week is an ISO date string for the Monday of that week (e.g. "2026-04-14")
+    //   • totalDistance is in miles
+    //
+    // weekLabels: format each week ISO date as "Apr 14", "Apr 21", etc.
+    const weekLabels = [/* one label per week in weeklyTrend */];
+    const weeklyDistances = [/* totalDistance per week in miles */];
+
+    // 4-week rolling average (null for first 3 weeks where window is incomplete)
+    const rollingAvg = weeklyDistances.map((_, i) => {
+      if (i < 3) return null;
+      const window = weeklyDistances.slice(i - 3, i + 1);
+      return window.reduce((a, b) => a + b, 0) / 4;
+    });
+
+    // Phase transition markers — simulate with a secondary dataset of points
+    // For each entry in trainingBlock.phaseTransitions: { phase, startDate }
+    // Find the index in weekLabels whose week contains startDate, then add a point at that index.
+    // Point dataset: x = weekLabel index, y = weeklyDistances[index], label = phase name
+    // Use pointStyle 'triangle', radius 8, color '#6b8e6b', no line (showLine: false)
+    const phaseDataset = {
+      type: 'scatter',
+      label: 'Phase Transition',
+      data: [/* { x: weekIndex, y: weeklyDistances[weekIndex] } for each phase transition */],
+      pointStyle: 'triangle',
+      pointRadius: 9,
+      backgroundColor: '#6b8e6b',
+      borderColor: '#6b8e6b',
+      showLine: false,
+    };
+
+    // C race markers
+    // For each race in raceConfig.races where designation === "C" and date is in the past:
+    // find the matching week index in weeklyTrend, add a point at that index.
+    const cRaceDataset = {
+      type: 'scatter',
+      label: 'C Race',
+      data: [/* { x: weekIndex, y: weeklyDistances[weekIndex] } for each past C race */],
+      pointStyle: 'star',
+      pointRadius: 10,
+      backgroundColor: '#c09060',
+      borderColor: '#c09060',
+      showLine: false,
+    };
+
+    // Key session markers — top 3 longest activities from garminMetrics.filteredActivities
+    // Find the week index for each activity's start date, add a point.
+    const keySessionDataset = {
+      type: 'scatter',
+      label: 'Key Session',
+      data: [/* { x: weekIndex, y: weeklyDistances[weekIndex] } for each top-3 effort */],
+      pointStyle: 'rectRot',
+      pointRadius: 8,
+      backgroundColor: '#c07058',
+      borderColor: '#c07058',
+      showLine: false,
+    };
+
+    const timelineCtx = document.getElementById('timelineChart').getContext('2d');
+    new Chart(timelineCtx, {
+      type: 'bar',
+      data: {
+        labels: weekLabels,
+        datasets: [
+          {
+            type: 'bar',
+            label: 'Weekly Volume (mi)',
+            data: weeklyDistances,
+            backgroundColor: 'rgba(107, 142, 107, 0.6)',
+            borderColor: 'rgba(107, 142, 107, 0.8)',
+            borderWidth: 1,
+            order: 3,
+          },
+          {
+            type: 'line',
+            label: '4-Week Rolling Avg',
+            data: rollingAvg,
+            borderColor: '#c07058',
+            borderWidth: 2,
+            tension: 0.4,
+            pointRadius: 3,
+            pointBackgroundColor: '#c07058',
+            fill: false,
+            spanGaps: false,
+            order: 2,
+          },
+          { ...phaseDataset, order: 1 },
+          { ...cRaceDataset, order: 1 },
+          { ...keySessionDataset, order: 1 },
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: {
+            ticks: { font: { family: 'DM Sans', size: 11 }, color: '#a09080', maxRotation: 45 },
+            grid: { color: '#e4ddd6' },
+          },
+          y: {
+            title: { display: true, text: 'Miles', font: { family: 'DM Sans', size: 11 }, color: '#a09080' },
+            ticks: { font: { family: 'DM Sans', size: 11 }, color: '#a09080' },
+            grid: { color: '#e4ddd6' },
+            beginAtZero: true,
+          }
+        },
+        plugins: {
+          legend: {
+            display: true,
+            labels: { font: { family: 'DM Sans', size: 11 }, color: '#1c1814', usePointStyle: true }
+          },
+          tooltip: {
+            callbacks: {
+              label: ctx => `${ctx.dataset.label}: ${typeof ctx.raw === 'object' ? ctx.raw.y?.toFixed(1) : ctx.raw?.toFixed(1)} mi`
+            }
+          }
+        }
+      }
+    });
+
+    // ── Section 7: Elevation Profile Overlay ────────────────────────────
+    //
+    // Only render the chart when courseData.elevationProfileAvailable !== false.
+    // When false, show the .elevation-unavailable div and hide the canvas wrapper.
+    //
+    // Race course trace: courseData.elevationProfileArray → [{ distanceMiles, elevationFeet }, ...]
+    // Training effort trace: built from mcp__garmin__get_activity_fit_data called in Module 8
+    //   with garminMetrics.volume.longestEffort's activity ID.
+    //   Extract GPS records → [{ distance_meters, altitude_meters }, ...]
+    //   Convert: distanceMiles = cumulative distance in km / 1.60934
+    //             elevationFeet = altitude_meters * 3.28084
+    //   Normalize both traces to percentage of their own total distance,
+    //   then re-scale x to miles using each trace's total distance.
+    //   Downsample to ≤200 points each for render performance.
+    //
+    // Both datasets share the same X axis (miles). Align by re-interpolating the shorter
+    // trace to match the longer trace's x range if needed, OR simply plot both raw and
+    // let Chart.js handle different x-lengths via the scatter-line approach below.
+
+    // courseTrace: array of { x: distanceMiles, y: elevationFeet } from courseData.elevationProfileArray
+    const courseTrace = [/* { x, y } per point */];
+
+    // effortTrace: array of { x: distanceMiles, y: elevationFeet } from Garmin fit data
+    const effortTrace = [/* { x, y } per point */];
+
+    const elevCtx = document.getElementById('elevationChart').getContext('2d');
+    new Chart(elevCtx, {
+      type: 'line',
+      data: {
+        datasets: [
+          {
+            label: 'Race Course',
+            data: courseTrace,
+            borderColor: '#c07058',
+            borderWidth: 2,
+            backgroundColor: 'rgba(192, 112, 88, 0.08)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 0,
+            parsing: { xAxisKey: 'x', yAxisKey: 'y' },
+          },
+          {
+            label: 'Longest Training Effort',
+            data: effortTrace,
+            borderColor: 'rgba(107, 142, 107, 0.8)',
+            borderWidth: 2,
+            backgroundColor: 'rgba(107, 142, 107, 0.06)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 0,
+            parsing: { xAxisKey: 'x', yAxisKey: 'y' },
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: {
+            type: 'linear',
+            title: { display: true, text: 'Distance (mi)', font: { family: 'DM Sans', size: 11 }, color: '#a09080' },
+            ticks: { font: { family: 'DM Sans', size: 11 }, color: '#a09080' },
+            grid: { color: '#e4ddd6' },
+          },
+          y: {
+            title: { display: true, text: 'Elevation (ft)', font: { family: 'DM Sans', size: 11 }, color: '#a09080' },
+            ticks: { font: { family: 'DM Sans', size: 11 }, color: '#a09080' },
+            grid: { color: '#e4ddd6' },
+          }
+        },
+        plugins: {
+          legend: {
+            display: true,
+            labels: { font: { family: 'DM Sans', size: 11 }, color: '#1c1814', usePointStyle: true }
+          },
+          tooltip: {
+            callbacks: {
+              title: items => `${items[0].parsed.x.toFixed(2)} mi`,
+              label: ctx => `${ctx.dataset.label}: ${Math.round(ctx.parsed.y)} ft`
+            }
+          }
+        }
       }
     });
   </script>
@@ -1737,6 +1992,75 @@ For any dimension where data was unavailable, render the gap analysis row with t
 After writing the file, tell the athlete:
 
 > "📄 Report saved to `~/startline-reports/[filename]`. Open it in your browser to view. (Google Fonts require an internet connection to render correctly.)"
+
+### Step 6 — Append Section 6: Training Block Timeline
+
+Append the Section 6 card to the report body, after Section 5.
+
+**Data preparation:**
+
+1. **Week labels** — format each entry in `garminMetrics.volume.weeklyTrend` as a human-readable week label. Parse the ISO date string in `week` and format as "Mon D" (e.g., "Apr 14"). Store as `weekLabels`.
+
+2. **Weekly distances** — extract `totalDistance` (miles) from each entry in `weeklyTrend`. Store as `weeklyDistances`.
+
+3. **Rolling average** — compute the 4-week rolling average over `weeklyDistances`. For weeks 0–2 (window incomplete), set the value to `null` so Chart.js skips the point.
+
+4. **Phase transition markers** — for each `{ phase, startDate }` in `trainingBlock.phaseTransitions`:
+   - Find the index in `weeklyTrend` whose `week` value is the nearest Monday on or before `startDate`.
+   - Create a scatter point `{ x: weekIndex, y: weeklyDistances[weekIndex] }` with the phase name in the tooltip.
+
+5. **C race markers** — for each race in `raceConfig.races` where `designation === "C"` and the race `date` is before today:
+   - Find the matching week index in `weeklyTrend`.
+   - Create a scatter point `{ x: weekIndex, y: weeklyDistances[weekIndex] }`.
+
+6. **Key session markers** — sort `garminMetrics.filteredActivities` by `distance` descending, take the top 3. For each, find the week index by matching its `startTimeLocal` date to a week in `weeklyTrend`. Create scatter points.
+
+**Substitute placeholders** in the HTML card before writing:
+- `[BLOCK_START_DATE]` → `trainingBlock.startDate` formatted as "Mon D, YYYY"
+- `[CURRENT_PHASE]` → `trainingBlock.currentPhase` (capitalize first letter)
+
+**Chart datasets to render** (all on the same `<canvas id="timelineChart">`):
+
+| Dataset | Type | Color |
+|---|---|---|
+| Weekly Volume (mi) | bar | `rgba(107, 142, 107, 0.6)` |
+| 4-Week Rolling Avg | line overlay | `#c07058`, tension 0.4 |
+| Phase Transitions | scatter | `#6b8e6b`, triangle pointStyle |
+| C Races | scatter | `#c09060`, star pointStyle |
+| Key Sessions | scatter | `#c07058`, rectRot pointStyle |
+
+### Step 7 — Append Section 7: Elevation Profile Overlay
+
+Append the Section 7 card after Section 6.
+
+**Condition check first:**
+
+If `courseData.elevationProfileAvailable === false` (Tier 3 manual entry):
+- In the HTML card, remove the `<div class="elevation-subtitle">` and `<div class="elevation-chart-wrapper">` elements.
+- Uncomment the `<div class="elevation-unavailable">` paragraph.
+- Skip all chart JS for this section — do not emit the `elevationChart` script block.
+- The card is still rendered (do not omit Section 7 entirely).
+
+**If elevation data is available:**
+
+1. **Race course trace** — from `courseData.elevationProfileArray`: array of `{ distanceMiles, elevationFeet }`. Convert to Chart.js scatter points `{ x: distanceMiles, y: elevationFeet }`. Downsample to ≤200 points if the array is longer (take every Nth point).
+
+2. **Training effort trace** — call `mcp__garmin__get_activity_fit_data` with the activity ID from `garminMetrics.volume.longestEffort`. This returns GPS/FIT records. Extract cumulative distance and altitude:
+   - Convert altitude from meters to feet (`× 3.28084`).
+   - Convert cumulative distance from meters to miles (`÷ 1609.34`).
+   - Output as `{ x: distanceMiles, y: elevationFeet }` scatter points.
+   - Downsample to ≤200 points.
+
+3. **Compute elevation gains** for the subtitle:
+   - Race: sum positive altitude deltas from `courseData.elevationProfileArray` (or use `courseData.totalElevationGain` if available).
+   - Training effort: sum positive altitude deltas from the FIT records.
+   - Format both as integers with comma separator (e.g., `4,200`).
+
+**Substitute placeholders** in the HTML card:
+- `[RACE_ELEV_GAIN]` → computed race elevation gain, formatted
+- `[EFFORT_ELEV_GAIN]` → computed training effort elevation gain, formatted
+
+Both traces share the X axis (distance in miles). Plot using Chart.js `type: 'line'` with `parsing: { xAxisKey: 'x', yAxisKey: 'y' }` so each dataset uses its own x values rather than a shared label array.
 
 Then ask:
 

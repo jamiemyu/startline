@@ -658,12 +658,144 @@ Work through each sub-section in order. Store all results in a `gapScores` objec
 ---
 
 ### 5a. Distance Gap
-*(Implemented in issue #6 — placeholder)*
+
+#### Inputs (already in working context)
+- `garminMetrics.volume.longestEffort.distance` — longest single training effort in miles
+- `garminMetrics.volume.longestEffort.date` — date of that longest effort (ISO YYYY-MM-DD)
+- `garminMetrics.volume.top3Average` — average of 3 longest efforts in miles
+- `courseData.totalDistance` — race distance in miles
+- `raceConfig.weeksToRace` — integer weeks until race day
+- `raceConfig.primaryRace.date` — race date (ISO YYYY-MM-DD)
+- `raceConfig.primaryRace.sport` and `.raceType`
+
+#### Step 1 — Look up race-type-specific thresholds
+
+Distance gap thresholds vary significantly by race type — a marathon runner is expected to race 1.3× their longest run, but a 5K runner trains well beyond race distance. Use the following per-race-type table (derived from Pfitzinger, Daniels, Hal Higdon, CTS, and TrainingPeaks coaching literature):
+
+| Sport | Race type | `distanceRatio` On Track | `distanceRatio` Gap | `distanceRatio` Risk | Notes |
+|---|---|---|---|---|---|
+| `running` | `mile` | Any ratio | — | — | Skip distance gap: athletes always train longer than 1 mi. Set `score: null, reason: "Distance not a limiting factor for mile races"` |
+| `running` | `5k` | Any ratio | — | — | Skip distance gap: athletes train 3–5× race distance. Same null treatment. |
+| `running` | `10k` | ≤ 2.5 | 2.5–3.5 | > 3.5 | Longest training run typically 12–16 mi (2–2.5× race dist) |
+| `running` | `half_marathon` | ≤ 1.35 | 1.35–1.65 | > 1.65 | Peak long run 10–13 mi; racing up to ~1.3× longest run is normal (PMC7496388) |
+| `running` | `marathon` | ≤ 1.35 | 1.35–1.55 | > 1.55 | Peak long run 20–22 mi (~75–85% of race dist); Pfitzinger, Hal Higdon consensus |
+| `running` | `ultra` | ≤ 1.6 | 1.6–2.5 | > 2.5 | 50K: peak ~20–24 mi; longer ultras use back-to-back days; CTS/iRunFar norms |
+| `road_cycling` | `criterium` | Any ratio | — | — | Skip: crit is intensity-limited (~45–90 min), not distance-limited. Null treatment. |
+| `road_cycling` | `gran_fondo` | ≤ 1.4 | 1.4–1.75 | > 1.75 | Peak training ride 70–85 mi for 100-mi event; TrainingPeaks/EVOQ.BIKE consensus |
+| `road_cycling` | `century` | ≤ 1.4 | 1.4–1.75 | > 1.75 | Same as gran fondo |
+| `mtb` | `xco` | Any ratio | — | — | Skip: XCO (~1.5–2.5 hr race) is shorter than typical training rides. Null treatment. |
+| `mtb` | `enduro` | ≤ 1.5 | 1.5–2.0 | > 2.0 | Technical terrain adds fatigue; peak training day ~4–5 hr; CTS/TrainingPeaks norms |
+
+If the race type is one of the "skip" types (mile, 5k, criterium, xco): store `gapScores.distance = { score: null, skipped: true, reason: "<reason from table>" }` and display a one-line note to the athlete. Proceed to 5b.
+
+Otherwise, compute:
+`distanceRatio = courseData.totalDistance / garminMetrics.volume.longestEffort.distance`
+
+#### Step 2 — Apply adaptive tightening
+
+The closer to race day, the more urgently the same gap reads. Apply this tightening factor to the On Track / Gap threshold boundary:
+
+| weeksToRace | Tightening factor |
+|---|---|
+| > 12 weeks | 1.0 (no tightening) |
+| 8–12 weeks | 0.92 (thresholds shift 8% stricter) |
+| 4–8 weeks | 0.85 |
+| < 4 weeks | 0.75 |
+
+Multiply the On Track ceiling and Gap ceiling by the tightening factor before comparing `distanceRatio`. A 🟡 Gap at 12 weeks may become 🔴 Risk at 3 weeks.
+
+#### Step 3 — Check taper recency (longest effort too close to race day)
+
+A long effort done too close to race day means the athlete may arrive at the start line fatigued — taper is essential for performance. Compute `daysFromLongestToRace = days between longestEffort.date and raceConfig.primaryRace.date`.
+
+Use these race-type-specific risk windows (based on Pfitzinger, CTS, and TrainingPeaks taper literature):
+
+| Race type | Ideal last long effort | Risk zone (too close) |
+|---|---|---|
+| `half_marathon` | ≥ 14 days before race | < 10 days |
+| `marathon` | ≥ 21 days before race | < 14 days |
+| `ultra` | ≥ 28 days before race | < 21 days |
+| `gran_fondo` / `century` | ≥ 14 days before race | < 10 days |
+| `enduro` | ≥ 14 days before race | < 10 days |
+
+If `daysFromLongestToRace` is within the risk zone, set `taperRisk: true` and add this note to the report:
+> ⚠️ **Taper flag:** Your longest training effort was [N] days before race day — less than the recommended [X]-day minimum. Racing on unrecovered legs can significantly impact performance. Prioritize rest.
+
+If within the ideal window (≥ minimum but earlier than risk zone), set `taperRisk: false`.
+If the longest effort was done very early (e.g., > 8 weeks ago), note this may indicate detraining rather than taper and flag it separately as `detrain: true` if `daysFromLongestToRace > 56`.
+
+#### Step 4 — Store result
+
+```json
+{
+  "score": "on_track" | "gap" | "risk" | null,
+  "skipped": false,
+  "longestEffortMiles": <number>,
+  "longestEffortDate": "YYYY-MM-DD",
+  "top3AverageMiles": <number>,
+  "raceDistanceMiles": <number>,
+  "distanceRatio": <number | null>,
+  "weeksToRace": <number>,
+  "tighteningFactor": <number>,
+  "taperRisk": true | false,
+  "detrain": true | false,
+  "reason": null
+}
+```
+
+Store as `gapScores.distance`.
+
+Display one line for the distance score + a separate taper flag line if applicable:
+- e.g. "📏 Distance: 🟡 Gap — longest run 18 mi, race is 26.2 mi (1.46× your longest effort)."
+- e.g. "⚠️ Taper flag: longest run was 10 days before race day (minimum recommended: 14 days)."
 
 ---
 
 ### 5b. Elevation Gap
-*(Implemented in issue #6 — placeholder)*
+
+#### Inputs (already in working context)
+- `garminMetrics.elevation.avgPerLongEffort` — average elevation gain per long effort in feet
+- `garminMetrics.elevation.cumulativeBlockGain` — total elevation gain over block in feet
+- `courseData.totalElevationGain` — race elevation gain in feet
+- `raceConfig.weeksToRace`
+
+#### Step 1 — Compute the gap ratio
+
+`elevationRatio = courseData.totalElevationGain / garminMetrics.elevation.avgPerLongEffort`
+
+If `avgPerLongEffort` is 0 or null:
+- Use `cumulativeBlockGain` as a proxy divided by number of long efforts (estimate as `activitiesAnalyzed / 4`)
+- If still null/0, set `score: null` with `reason: "No elevation data in training activities"` and skip scoring
+
+#### Step 2 — Score the gap
+
+Base thresholds:
+
+| elevationRatio | Base score |
+|---|---|
+| ≤ 1.5 | 🟢 On Track |
+| 1.5 – 2.5 | 🟡 Gap |
+| > 2.5 | 🔴 Risk |
+
+Apply the same adaptive tightening factor from 5a (use `raceConfig.weeksToRace` → same table).
+
+#### Step 3 — Store result
+
+```json
+{
+  "score": "on_track" | "gap" | "risk" | null,
+  "avgElevationPerLongEffortFeet": <number | null>,
+  "raceElevationGainFeet": <number>,
+  "elevationRatio": <number | null>,
+  "weeksToRace": <number>,
+  "tighteningFactor": <number>,
+  "reason": null
+}
+```
+
+Store as `gapScores.elevation`.
+
+Display one line: e.g. "⛰️ Elevation: 🔴 Risk — avg 800 ft/long run, race demands 4,200 ft (5.25× your training average)."
 
 ---
 

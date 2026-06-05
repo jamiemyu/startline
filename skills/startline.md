@@ -649,6 +649,98 @@ Then proceed immediately to Module 5.
 
 ---
 
+## Module 4b: TrainingPeaks Enrichment
+
+This module runs after Module 4 (Training Block Detection) and before Module 5 (Gap Analysis). It is purely additive — if TrainingPeaks is not connected, all downstream modules continue on Garmin data only.
+
+---
+
+### Step 1 — Check TrainingPeaks availability
+
+Attempt `mcp__trainingpeaks__tp_auth_status`.
+
+- If it errors with "not connected" or the tool doesn't exist: set `tpEnrichment = null`, display "ℹ️ TrainingPeaks not connected — running on Garmin data only." and skip to Module 5 immediately.
+- If it returns connected: proceed to Step 2.
+
+---
+
+### Step 2 — Pull CTL/ATL/TSB history
+
+Call `mcp__trainingpeaks__tp_get_fitness` to retrieve fitness metrics history.
+
+Extract and store:
+- `ctlHistory` — array of `{ date, ctl }` for the trailing 16 weeks, sorted oldest→newest
+- `atlHistory` — array of `{ date, atl }` for the same window
+- `tsbHistory` — array of `{ date, tsb }` for the same window
+- `currentCTL` — the most recent CTL value
+- `currentATL` — the most recent ATL value
+- `currentTSB` — the most recent TSB value (form: positive = fresh, negative = fatigued)
+
+---
+
+### Step 3 — Pull structured training plan
+
+Call `mcp__trainingpeaks__tp_get_workouts` for the last 4 weeks and next 2 weeks (date range: today minus 28 days to today plus 14 days).
+
+*(4 weeks = one standard mesocycle — long enough to capture a complete training block phase, short enough that coach notes remain contextually relevant to current fitness. Going further back risks surfacing notes from a different training phase that no longer apply.)*
+
+Extract:
+- `coachNotes` — array of any workout descriptions or coach notes found in the workouts
+- `trainingPhase` — if any workout has a phase label (Base/Build/Peak/Taper), extract the most recent one; otherwise null
+- `plannedWorkouts` — count of planned workouts in next 2 weeks (for freshness context)
+
+---
+
+### Step 4 — Pull subjective data
+
+Call `mcp__trainingpeaks__tp_get_metrics` for the last 4 weeks. *(4-week window matches the workout plan window above — one mesocycle of subjective data provides enough signal for form trends without diluting with stale entries from a prior training phase.)*
+
+Extract if available:
+- Recent RPE values (1–10 scale) — store as `recentRPEValues` array
+- Feel tags (strong / normal / weak) — store as `recentFeelTags` array
+
+If `tp_get_metrics` is unavailable or returns no subjective data, set both to empty arrays — never halt.
+
+---
+
+### Step 5 — Assemble enrichment object
+
+Store as `tpEnrichment` in working context:
+
+```json
+{
+  "available": true,
+  "currentCTL": <number>,
+  "currentATL": <number>,
+  "currentTSB": <number>,
+  "ctlHistory": [{ "date": "YYYY-MM-DD", "ctl": <number> }],
+  "atlHistory": [{ "date": "YYYY-MM-DD", "atl": <number> }],
+  "tsbHistory": [{ "date": "YYYY-MM-DD", "tsb": <number> }],
+  "coachNotes": ["..."],
+  "trainingPhase": "Base" | "Build" | "Peak" | "Taper" | null,
+  "plannedWorkouts": <number>,
+  "recentRPEValues": [<1-10>],
+  "recentFeelTags": ["strong" | "normal" | "weak"]
+}
+```
+
+Notify the athlete: "✅ TrainingPeaks connected — CTL: [currentCTL], TSB: [currentTSB] ([fresh/fatigued]). Enriching analysis..." then proceed to Module 5.
+
+(TSB > 0 = "fresh", TSB < -10 = "fatigued", between = "neutral")
+
+---
+
+### How downstream modules use tpEnrichment
+
+All downstream modules check `if (tpEnrichment?.available)` before using TP data, and fall back to Garmin-only logic otherwise.
+
+- **Gap analysis (Module 5):** Intensity gap scoring uses coach workout prescriptions as context for whether high-Z4/Z5 training was intentional.
+- **Performance prediction (Module 6):** `currentCTL` used as fitness ceiling proxy; confidence interval narrowed when CTL history is available.
+- **Training block detection (Module 4):** Already handled — Module 4 checks TrainingPeaks first; this module provides the richer structured data pass.
+- **Taper phase:** `currentTSB` used to assess freshness; a very negative TSB close to race day is flagged.
+
+---
+
 ## Module 5: Gap Analysis
 
 This module scores the gap between the athlete's training and race demands across five dimensions. Each dimension produces a score: 🟢 On Track / 🟡 Gap / 🔴 Risk.

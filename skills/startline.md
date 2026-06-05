@@ -1420,4 +1420,324 @@ Then proceed to Module 8.
 ---
 
 ## Module 8: HTML Report Generation
-*(Implemented in issues #13–#16 — placeholder)*
+
+### Step 1 — Prepare report data
+
+Collect all the values from working context that the report needs:
+- From `raceConfig.primaryRace`: `sport`, `raceType`, `date`, `name`
+- `raceConfig.weeksToRace`, `raceConfig.daysToRace`
+- `readiness.readinessPct`
+- `prediction.rangeLow`, `prediction.rangeHigh`, `prediction.confidencePct`
+- `gapScores` object (all five dimensions)
+- `readiness.includedDimensions`, `readiness.excludedDimensions`
+- All races from `raceConfig.races` (for the race calendar strip)
+
+Compute `reportFilename`:
+- Format: `[sport]-[race-name-slugified]-[YYYY-MM-DD].html`
+- Slugify race name: lowercase, replace spaces with hyphens, strip special characters
+- Example: `running-chicago-marathon-2026-10-04.html`
+
+### Step 2 — Create the reports directory
+
+Run via Bash:
+```bash
+mkdir -p ~/startline-reports
+```
+
+### Step 3 — Generate the HTML file
+
+Write a complete, self-contained HTML file to `~/startline-reports/[reportFilename]`.
+
+The file must include all five sections below. Use Chart.js via CDN (`https://cdn.jsdelivr.net/npm/chart.js`). Load Google Fonts via CDN link tag.
+
+**Design system (must match exactly):**
+- Background: `#f0ebe4`
+- Card background: `#faf7f2`
+- Card border: `rgba(0,0,0,0.07)`
+- Primary text: `#1c1814`
+- Secondary text: `#a09080`
+- Divider: `#e4ddd6`
+- On Track: `#6aaa6e` / bg `#e2eedc`
+- Gap: `#c09060` / bg `#f0e8da`
+- Risk: `#c07058` / bg `#f0e0da`
+- Fonts: Lora (serif, race title + metric values) + DM Sans (body/labels) via Google Fonts CDN
+
+Use this HTML template structure:
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>[Race Name] — Startline Report</title>
+  <link href="https://fonts.googleapis.com/css2?family=Lora:wght@400;700&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: #f0ebe4;
+      color: #1c1814;
+      padding: 32px 16px;
+      max-width: 860px;
+      margin: 0 auto;
+    }
+    .card {
+      background: #faf7f2;
+      border: 1px solid rgba(0,0,0,0.07);
+      border-radius: 16px;
+      padding: 28px 32px;
+      margin-bottom: 20px;
+    }
+    .divider { border: none; border-top: 1px solid #e4ddd6; margin: 20px 0; }
+    .secondary { color: #a09080; }
+    .lora { font-family: 'Lora', serif; }
+
+    /* Section 1 — Header */
+    .header-race-name { font-family: 'Lora', serif; font-size: 2.2rem; font-weight: 700; line-height: 1.2; }
+    .header-subtitle { color: #a09080; font-size: 1rem; margin-top: 6px; text-transform: capitalize; }
+    .header-date { font-size: 0.95rem; color: #a09080; margin-top: 8px; }
+
+    /* Section 2 — Race Calendar Strip */
+    .calendar-title { font-weight: 700; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: #a09080; margin-bottom: 20px; }
+    .calendar-strip { display: flex; align-items: flex-start; gap: 0; position: relative; }
+    .calendar-strip::before {
+      content: '';
+      position: absolute;
+      top: 10px;
+      left: 0; right: 0;
+      height: 2px;
+      background: #e4ddd6;
+      z-index: 0;
+    }
+    .calendar-race {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex: 1;
+      position: relative;
+      z-index: 1;
+    }
+    .calendar-dot {
+      width: 20px; height: 20px;
+      border-radius: 50%;
+      border: 3px solid #faf7f2;
+      margin-bottom: 8px;
+      flex-shrink: 0;
+    }
+    .calendar-dot.priority-a { background: #c07058; }
+    .calendar-dot.priority-b { background: #c09060; }
+    .calendar-dot.priority-c { background: #a09080; }
+    .calendar-race-name { font-size: 0.75rem; font-weight: 500; text-align: center; line-height: 1.3; }
+    .calendar-weeks { font-size: 0.7rem; color: #a09080; margin-top: 2px; }
+
+    /* Section 3 — Hero Metrics */
+    .metrics-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .metric-card {
+      background: #faf7f2;
+      border: 1px solid rgba(0,0,0,0.07);
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+    }
+    .metric-label { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #a09080; margin-bottom: 8px; }
+    .metric-value { font-family: 'Lora', serif; font-size: 2rem; font-weight: 700; line-height: 1.1; }
+    .metric-sub { font-size: 0.8rem; color: #a09080; margin-top: 4px; }
+
+    /* Section 4 — Radar Chart */
+    .radar-wrapper { display: flex; justify-content: center; }
+    .radar-wrapper canvas { max-width: 400px; max-height: 400px; }
+    .radar-na { font-size: 0.85rem; color: #a09080; text-align: center; margin-top: 12px; }
+
+    /* Section 5 — Gap Analysis */
+    .gap-title { font-weight: 700; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: #a09080; margin-bottom: 16px; }
+    .gap-row { display: flex; align-items: center; gap: 16px; padding: 14px 0; border-bottom: 1px solid #e4ddd6; }
+    .gap-row:last-child { border-bottom: none; }
+    .gap-icon { font-size: 1.3rem; width: 28px; text-align: center; flex-shrink: 0; }
+    .gap-name { font-weight: 700; font-size: 0.95rem; min-width: 110px; }
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 0.78rem; font-weight: 700;
+      padding: 3px 10px; border-radius: 999px;
+      white-space: nowrap; flex-shrink: 0;
+    }
+    .status-pill.on-track { background: #e2eedc; color: #6aaa6e; }
+    .status-pill.gap      { background: #f0e8da; color: #c09060; }
+    .status-pill.risk     { background: #f0e0da; color: #c07058; }
+    .status-pill.na       { background: #ede9e4; color: #a09080; }
+    .gap-detail { font-size: 0.85rem; color: #a09080; flex: 1; }
+    .gap-detail strong { color: #1c1814; }
+    .taper-banner {
+      background: #f0e8da;
+      border: 1px solid #c09060;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 0.85rem;
+      color: #c09060;
+      margin-top: -8px;
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Section 1: Header -->
+  <div class="card">
+    <div class="header-race-name lora">[RACE_NAME]</div>
+    <div class="header-subtitle">[SPORT] · [RACE_TYPE]</div>
+    <div class="header-date">[RACE_DATE_FORMATTED] · [DAYS_TO_RACE] days out</div>
+  </div>
+
+  <!-- Section 2: Race Calendar Strip -->
+  <div class="card">
+    <div class="calendar-title">Race Calendar</div>
+    <div class="calendar-strip">
+      <!-- For each race in raceConfig.races, insert: -->
+      <!--
+      <div class="calendar-race">
+        <div class="calendar-dot priority-[a|b|c]"></div>
+        <div class="calendar-race-name">[race.name or race.raceType]</div>
+        <div class="calendar-weeks">[weeksOut] wks</div>
+      </div>
+      -->
+    </div>
+  </div>
+
+  <!-- Section 3: Hero Metrics -->
+  <div class="metrics-grid" style="margin-bottom: 20px;">
+    <div class="metric-card">
+      <div class="metric-label">Readiness</div>
+      <div class="metric-value lora">[READINESS_PCT]%</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Finish Window</div>
+      <div class="metric-value lora" style="font-size:1.4rem;">[RANGE_LOW] – [RANGE_HIGH]</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Confidence</div>
+      <div class="metric-value lora">[CONFIDENCE_PCT]%</div>
+    </div>
+  </div>
+
+  <!-- Section 4: Radar Chart -->
+  <div class="card">
+    <div class="radar-wrapper">
+      <canvas id="radarChart"></canvas>
+    </div>
+    <!-- If any dimensions were excluded/skipped: -->
+    <div class="radar-na">N/A dimensions (excluded from chart): [EXCLUDED_LIST or "none"]</div>
+  </div>
+
+  <!-- Section 5: Gap Analysis -->
+  <div class="card">
+    <div class="gap-title">Gap Analysis</div>
+
+    <!-- For each included dimension, render a .gap-row -->
+    <!-- Example on-track row: -->
+    <!--
+    <div class="gap-row">
+      <div class="gap-icon">📏</div>
+      <div class="gap-name">Distance</div>
+      <span class="status-pill on-track">● On Track</span>
+      <div class="gap-detail">
+        <strong>Longest run: 22 mi</strong> · Race distance: 26.2 mi
+      </div>
+    </div>
+    -->
+
+    <!-- Taper risk banner (if gapScores.distance.taperRisk === true): -->
+    <!--
+    <div class="taper-banner">⚠️ [taperMessage]</div>
+    -->
+
+    <!-- For excluded/skipped dimensions, render with na pill: -->
+    <!--
+    <div class="gap-row">
+      <div class="gap-icon">🌡️</div>
+      <div class="gap-name">Temperature</div>
+      <span class="status-pill na">N/A</span>
+      <div class="gap-detail">[reason from gapScores.temperature.reason]</div>
+    </div>
+    -->
+  </div>
+
+  <script>
+    // Build radar chart from included dimensions only
+    // Map status to numeric score: on_track=100, gap=60, risk=20
+    // Omit dimensions where status is null/skipped
+    const radarLabels = [/* dimension names for included dims */];
+    const radarData   = [/* corresponding scores */];
+
+    const ctx = document.getElementById('radarChart').getContext('2d');
+    new Chart(ctx, {
+      type: 'radar',
+      data: {
+        labels: radarLabels,
+        datasets: [{
+          label: 'Race Readiness',
+          data: radarData,
+          backgroundColor: 'rgba(192, 112, 88, 0.2)',
+          borderColor: '#c07058',
+          borderWidth: 2,
+          pointBackgroundColor: '#c07058',
+          pointRadius: 4,
+        }]
+      },
+      options: {
+        scales: {
+          r: {
+            min: 0, max: 100,
+            ticks: { stepSize: 20, font: { family: 'DM Sans' }, color: '#a09080' },
+            grid: { color: '#e4ddd6' },
+            pointLabels: { font: { family: 'DM Sans', size: 13 }, color: '#1c1814' }
+          }
+        },
+        plugins: { legend: { display: false } }
+      }
+    });
+  </script>
+
+</body>
+</html>
+```
+
+Fill in all template placeholders with real values from working context before writing the file. Do not write the template literally — substitute every `[PLACEHOLDER]` with the computed value.
+
+**Dimension icons and keys:**
+| Dimension   | Icon | gapScores key   |
+|-------------|------|-----------------|
+| Distance    | 📏   | `distance`      |
+| Elevation   | ⛰️   | `elevation`     |
+| Terrain     | 🌲   | `terrain`       |
+| Intensity   | ⚡   | `intensity`     |
+| Temperature | 🌡️  | `temperature`   |
+
+**Status → score mapping for radar:**
+- `on_track` → 100
+- `gap` → 60
+- `risk` → 20
+- `null` / skipped → omit axis entirely
+
+**Race priority → dot class:**
+- `A` → `priority-a` (coral `#c07058`)
+- `B` → `priority-b` (amber `#c09060`)
+- `C` → `priority-c` (grey `#a09080`)
+
+**Weeks-to-race for calendar strip:** compute from today's date to each race's date. Round to nearest whole week. If the race is in the past, show "past".
+
+**Number formatting:** format all numeric values for human readability — e.g., `4,200 ft`, `26.2 mi`, `3:45:00`.
+
+### Step 4 — Note missing data inline
+
+For any dimension where data was unavailable, render the gap analysis row with the grey `na` pill and include the `reason` field from the gap score object as the detail text. Do not omit the row.
+
+### Step 5 — Save and confirm
+
+After writing the file, tell the athlete:
+
+> "📄 Report saved to `~/startline-reports/[filename]`. Open it in your browser to view. (Google Fonts require an internet connection to render correctly.)"
+
+Then ask:
+
+> "Would you like to spotlight a recent key session and see how it maps to your race readiness?"

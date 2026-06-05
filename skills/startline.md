@@ -658,12 +658,116 @@ Work through each sub-section in order. Store all results in a `gapScores` objec
 ---
 
 ### 5a. Distance Gap
-*(Implemented in issue #6 — placeholder)*
+
+#### Inputs (already in working context)
+- `garminMetrics.volume.longestEffort.distance` — longest single training effort in miles
+- `garminMetrics.volume.top3Average` — average of 3 longest efforts in miles
+- `courseData.totalDistance` — race distance in miles
+- `raceConfig.weeksToRace` — integer weeks until race day
+- `raceConfig.primaryRace.sport` and `.raceType`
+
+#### Step 1 — Apply sport-specific extrapolation ceiling
+
+The longest training effort is not expected to match race distance — athletes extrapolate. Apply the sport-specific ceiling:
+
+| Sport | Extrapolation ceiling (safe race distance = longest effort × multiplier) |
+|---|---|
+| `running` | × 1.3 |
+| `road_cycling` | × 2.5 (athletes can comfortably race 2–3× longest ride) |
+| `mtb` | × 1.8 (technical terrain adds fatigue; lower ceiling than road) |
+
+Compute `safeRaceDistance = longestEffort × multiplier`.
+
+#### Step 2 — Score the gap
+
+Compute `distanceRatio = courseData.totalDistance / garminMetrics.volume.longestEffort.distance`.
+
+Base thresholds (before adaptive tightening):
+
+| distanceRatio | Base score |
+|---|---|
+| ≤ sport ceiling multiplier | 🟢 On Track |
+| ceiling × 1.0 – ceiling × 1.23 | 🟡 Gap |
+| > ceiling × 1.23 | 🔴 Risk |
+
+**Adaptive tightening by weeks to race:**
+The closer to race day, the more urgently the same gap reads. Apply this multiplier to tighten thresholds:
+
+| weeksToRace | Tightening factor |
+|---|---|
+| > 12 weeks | 1.0 (no tightening) |
+| 8–12 weeks | 0.92 (thresholds shift 8% stricter) |
+| 4–8 weeks | 0.85 |
+| < 4 weeks | 0.75 |
+
+Multiply both threshold boundaries by the tightening factor before comparing. A 🟡 Gap at 12 weeks may become 🔴 Risk at 3 weeks.
+
+#### Step 3 — Store result
+
+```json
+{
+  "score": "on_track" | "gap" | "risk",
+  "longestEffortMiles": <number>,
+  "top3AverageMiles": <number>,
+  "raceDistanceMiles": <number>,
+  "distanceRatio": <number>,
+  "safeRaceDistance": <number>,
+  "weeksToRace": <number>,
+  "tighteningFactor": <number>
+}
+```
+
+Store as `gapScores.distance`.
+
+Display one line: e.g. "📏 Distance: 🟡 Gap — longest run 18 mi, race is 26.2 mi (1.46× your longest effort)."
 
 ---
 
 ### 5b. Elevation Gap
-*(Implemented in issue #6 — placeholder)*
+
+#### Inputs (already in working context)
+- `garminMetrics.elevation.avgPerLongEffort` — average elevation gain per long effort in feet
+- `garminMetrics.elevation.cumulativeBlockGain` — total elevation gain over block in feet
+- `courseData.totalElevationGain` — race elevation gain in feet
+- `raceConfig.weeksToRace`
+
+#### Step 1 — Compute the gap ratio
+
+`elevationRatio = courseData.totalElevationGain / garminMetrics.elevation.avgPerLongEffort`
+
+If `avgPerLongEffort` is 0 or null:
+- Use `cumulativeBlockGain` as a proxy divided by number of long efforts (estimate as `activitiesAnalyzed / 4`)
+- If still null/0, set `score: null` with `reason: "No elevation data in training activities"` and skip scoring
+
+#### Step 2 — Score the gap
+
+Base thresholds:
+
+| elevationRatio | Base score |
+|---|---|
+| ≤ 1.5 | 🟢 On Track |
+| 1.5 – 2.5 | 🟡 Gap |
+| > 2.5 | 🔴 Risk |
+
+Apply the same adaptive tightening factor from 5a (use `raceConfig.weeksToRace` → same table).
+
+#### Step 3 — Store result
+
+```json
+{
+  "score": "on_track" | "gap" | "risk" | null,
+  "avgElevationPerLongEffortFeet": <number | null>,
+  "raceElevationGainFeet": <number>,
+  "elevationRatio": <number | null>,
+  "weeksToRace": <number>,
+  "tighteningFactor": <number>,
+  "reason": null
+}
+```
+
+Store as `gapScores.elevation`.
+
+Display one line: e.g. "⛰️ Elevation: 🔴 Risk — avg 800 ft/long run, race demands 4,200 ft (5.25× your training average)."
 
 ---
 

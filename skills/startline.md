@@ -362,7 +362,165 @@ Once assembled, confirm to the user in one short sentence that training data has
 ---
 
 ## Module 3: Course Data Ingestion
-*(Implemented in issue #4 — placeholder)*
+
+### Overview
+
+This module collects race course data from the athlete. Three collection tiers are tried in priority order: GPX/FIT file upload, Strava route URL, and manual stat entry. By the end, a `courseData` object is stored in working context for all downstream modules.
+
+---
+
+### Step 1 — Prompt the athlete
+
+Ask the athlete in a single message:
+
+> "Upload your race course GPX/FIT file, or share a Strava route URL. (If neither is available, provide the key stats: distance in miles and elevation gain in feet.)"
+
+Wait for the athlete's response, then branch to the appropriate tier below.
+
+---
+
+### Tier 1 — GPX/FIT File Upload (primary)
+
+**Trigger:** Athlete uploads a file attachment, or provides a local file path ending in `.gpx` or `.fit`.
+
+**Parse the file to extract all of the following fields:**
+
+**`totalDistance`** — total route distance in miles.
+Convert from meters: divide by 1609.344.
+
+**`totalElevationGain`** — total elevation gain in feet.
+Convert from meters: multiply by 3.28084. Sum only positive elevation deltas between consecutive trackpoints.
+
+**`totalElevationLoss`** — total elevation loss in feet.
+Convert from meters: multiply by 3.28084. Sum only negative elevation deltas (as a positive number).
+
+**`gradeVariabilityIndex` (GVI)** — standard deviation of grade across 50-meter GPS windows. Compute as follows:
+1. Walk the GPS coordinate array in 50-meter segments (measure horizontal distance between consecutive points using the Haversine formula or equivalent)
+2. For each 50-meter segment compute grade = (elevation change in meters) / (horizontal distance in meters) × 100
+3. Compute the standard deviation of all segment grades
+4. Round to 2 decimal places
+
+GVI is used for MTB terrain analysis only; compute it regardless of sport so it is available if needed.
+
+**`elevationProfileArray`** — a sampled array of `{ distanceMiles, elevationFeet }` objects representing the elevation profile.
+- Walk the trackpoints cumulatively, recording distance (miles) and elevation (feet) at each point
+- Downsample to at most 200 points: if the raw point count exceeds 200, take every Nth point where N = floor(rawCount / 200), ensuring the final point is always included
+
+**Store result with `tier: "gpx_fit"`** and proceed to Step 2.
+
+---
+
+### Tier 2 — Strava Route URL (fallback)
+
+**Trigger:** Athlete provides a URL containing `strava.com/routes/`.
+
+**Prerequisite check — confirm Strava MCP is connected:**
+Before attempting any Strava fetch, try calling `mcp__strava-mcp__health` or `mcp__strava-mcp__get_athlete_profile`. If no `mcp__strava*` tools respond (tool not found, connection error, or authentication error), skip directly to Tier 3 and inform the athlete:
+
+> "Strava MCP isn't connected — I'll need the course stats manually instead."
+
+**If Strava MCP is available:**
+1. Extract the numeric route ID from the URL (the segment after `/routes/`)
+2. Use available `mcp__strava-mcp__*` tools to fetch the route's GPS and elevation data
+3. From the returned route data, extract the same five fields as Tier 1:
+   - `totalDistance` in miles (convert from meters: ÷ 1609.344)
+   - `totalElevationGain` in feet (convert from meters: × 3.28084)
+   - `totalElevationLoss` in feet (convert from meters: × 3.28084)
+   - `gradeVariabilityIndex` — compute from GPS stream data using the same 50-meter window method as Tier 1; set to `null` if no GPS stream is available
+   - `elevationProfileArray` — build from the altitude stream (downsample to ≤200 points); set to `null` if no altitude stream is available
+
+**Store result with `tier: "strava_url"`** and proceed to Step 2.
+
+---
+
+### Tier 3 — Manual Stat Entry (last resort)
+
+**Trigger:** Athlete types stats directly, or neither Tier 1 nor Tier 2 was available or successful.
+
+Ask the athlete:
+
+> "No problem — what's the total race distance (in miles) and total elevation gain (in feet)?"
+
+**Parse the response** to extract `totalDistance` and `totalElevationGain`. Handle varied formats, including:
+- "26.2 miles, 1200 feet"
+- "26.2 / 1200"
+- "26.2 and 1200"
+- Two bare numbers in sequence (first = distance, second = elevation gain)
+
+If the input is ambiguous or the units are unclear, ask one clarifying follow-up.
+
+**Store result with `tier: "manual"` and these flags:**
+- `totalElevationLoss: null`
+- `gradeVariabilityIndex: null`
+- `elevationProfileArray: null`
+- `elevationProfileAvailable: false` — suppresses the elevation overlay chart in the HTML report
+- `terrainEstimated: true` — marks the terrain dimension as using race-type defaults (no GVI available)
+
+Proceed to Step 2.
+
+---
+
+### Step 2 — Assemble and store courseData
+
+Store the following `courseData` object in working context:
+
+```json
+{
+  "tier": "gpx_fit" | "strava_url" | "manual",
+  "totalDistance": <miles, number>,
+  "totalElevationGain": <feet, number>,
+  "totalElevationLoss": <feet | null>,
+  "gradeVariabilityIndex": <number | null>,
+  "elevationProfileArray": [{ "distanceMiles": <n>, "elevationFeet": <n> }] | null,
+  "elevationProfileAvailable": true | false,
+  "terrainEstimated": true | false,
+  "source": "<description of source used>"
+}
+```
+
+**Field rules:**
+- `elevationProfileAvailable`: set to `true` for Tier 1 and Tier 2 (when an elevation stream was available), `false` for Tier 3 or when no altitude data was returned
+- `terrainEstimated`: set to `false` for Tier 1 and Tier 2, `true` for Tier 3
+- `source`: a short human-readable string, e.g. `"GPX file upload"`, `"Strava route 123456789"`, or `"Manual entry"`
+
+**Confirm to the athlete in one line.** Format the confirmation as:
+
+> "Course loaded: [X] mi, [Y,YYY] ft gain ([source shorthand])."
+
+Examples:
+- "Course loaded: 26.2 mi, 1,840 ft gain (GPX file)."
+- "Course loaded: 50.0 mi, 5,200 ft gain (Strava route)."
+- "Course loaded: 13.1 mi, 600 ft gain (manual entry)."
+
+Then proceed immediately to Module 4.
+
+---
+
+### Report notation
+
+When generating the HTML report in Module 8, always note which tier was used for course data:
+
+| Tier | Report label |
+|---|---|
+| `gpx_fit` | "Course data: GPX/FIT file" |
+| `strava_url` | "Course data: Strava route" |
+| `manual` | "Course data: Manual entry — elevation profile chart not available" |
+
+When `elevationProfileAvailable` is `false`, suppress the elevation overlay chart entirely — do not render an empty chart.
+
+When `terrainEstimated` is `true`, add a note to the terrain dimension in the gap analysis: "Terrain scoring based on race-type defaults (no course file provided)."
+
+---
+
+### Error handling summary for Module 3
+
+| Situation | Action |
+|---|---|
+| File upload fails to parse | Inform athlete, ask them to try re-uploading or provide manual stats |
+| Strava MCP unavailable | Skip to Tier 3, inform athlete |
+| Strava route fetch fails (e.g., private route, 404) | Inform athlete, fall through to Tier 3 |
+| Manual entry is ambiguous | Ask one clarifying follow-up before proceeding |
+| Athlete provides distance only (no elevation) | Ask for elevation gain specifically before assembling courseData |
 
 ---
 

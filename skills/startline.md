@@ -56,7 +56,7 @@ Once sport is known, validate the race type against the supported list for that 
 
 | Sport | Valid race types (canonical) |
 |---|---|
-| `running` | `5k`, `10k`, `half_marathon`, `marathon`, `ultra` |
+| `running` | `5k`, `10k`, `mile`, `half_marathon`, `marathon`, `ultra` |
 | `road_cycling` | `criterium`, `gran_fondo`, `century` |
 | `mtb` | `xco`, `enduro` |
 
@@ -73,7 +73,7 @@ Apply these aliases before validating:
 Match case-insensitively.
 
 If the sport/race-type combination is not in the supported list, respond:
-> "That sport/race-type combination isn't supported yet. Supported combinations are: Running (5K, 10K, Half Marathon, Marathon, Ultra), Road Cycling (Criterium, Gran Fondo/Century), MTB (XCO, Enduro). Which would you like to analyze?"
+> "That sport/race-type combination isn't supported yet. Supported combinations are: Running (5K, 10K, Mile, Half Marathon, Marathon, Ultra), Road Cycling (Criterium, Gran Fondo/Century), MTB (XCO, Enduro). Which would you like to analyze?"
 
 Wait for a clarified response and re-parse.
 

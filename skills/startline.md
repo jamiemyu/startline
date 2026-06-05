@@ -682,6 +682,8 @@ Extract and store:
 
 Call `mcp__trainingpeaks__tp_get_workouts` for the last 4 weeks and next 2 weeks (date range: today minus 28 days to today plus 14 days).
 
+*(4 weeks = one standard mesocycle — long enough to capture a complete training block phase, short enough that coach notes remain contextually relevant to current fitness. Going further back risks surfacing notes from a different training phase that no longer apply.)*
+
 Extract:
 - `coachNotes` — array of any workout descriptions or coach notes found in the workouts
 - `trainingPhase` — if any workout has a phase label (Base/Build/Peak/Taper), extract the most recent one; otherwise null
@@ -691,7 +693,7 @@ Extract:
 
 ### Step 4 — Pull subjective data
 
-Call `mcp__trainingpeaks__tp_get_metrics` for the last 4 weeks.
+Call `mcp__trainingpeaks__tp_get_metrics` for the last 4 weeks. *(4-week window matches the workout plan window above — one mesocycle of subjective data provides enough signal for form trends without diluting with stale entries from a prior training phase.)*
 
 Extract if available:
 - Recent RPE values (1–10 scale) — store as `recentRPEValues` array

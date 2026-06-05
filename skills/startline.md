@@ -897,7 +897,107 @@ Display one line: e.g. "⛰️ Elevation: 🔴 Risk — avg 800 ft/long run, rac
 ---
 
 ### 5d. Intensity Gap
-*(Implemented in issue #8 — placeholder)*
+
+#### Inputs
+- `garminMetrics` — full activity list from Module 2
+- `raceConfig.primaryRace.sport`, `.raceType`
+- `trainingBlock.currentPhase` — from Module 4
+- `tpEnrichment` — from Module 4b (may be null)
+
+---
+
+#### Step 1 — Compute HR zone distribution
+
+Take the top 10 most recent activities from `garminMetrics.filteredActivities` (sorted by date descending).
+
+For each activity, call `mcp__garmin__get_activity_hr_in_timezones` with the activity ID. Extract the minutes spent in each zone (Z1–Z5).
+
+Sum across all activities:
+- `totalMinutesZ1`, `totalMinutesZ2`, `totalMinutesZ3`, `totalMinutesZ4`, `totalMinutesZ5`
+- `totalMinutes` = sum of all zone minutes
+- Compute percentages: `pctZ1` = `totalMinutesZ1 / totalMinutes × 100`, etc.
+
+Store as `trainingDistribution = { pctZ1, pctZ2, pctZ3, pctZ4, pctZ5 }`.
+
+**If HR zone data is unavailable** (tool errors for all activities or returns no zone data): attempt to estimate from pace/power data if available, or set `trainingDistribution = null` and skip intensity scoring:
+```json
+{ "score": null, "reason": "No HR zone data available in recent activities" }
+```
+Store as `gapScores.intensity` and skip to the next sub-section.
+
+---
+
+#### Step 2 — Look up expected race intensity profile
+
+Match `raceConfig.primaryRace.sport` × `raceConfig.primaryRace.raceType` to the expected intensity profile:
+
+| Sport | Race type | Expected profile (dominant zones) | Key descriptor |
+|---|---|---|---|
+| `running` | `mile` | Z5: >40%, Z4: >30% | VO2max dominant |
+| `running` | `5k` | Z4–Z5: >60% combined | VO2max dominant |
+| `running` | `10k` | Z4: >40%, Z3: >20% | Threshold + VO2max |
+| `running` | `half_marathon` | Z3–Z4: >60% combined | Threshold dominant |
+| `running` | `marathon` | Z2–Z3: >65% combined | Aerobic + marathon pace |
+| `running` | `ultra` | Z1–Z2: >70% combined | Aerobic base, time-on-feet |
+| `road_cycling` | `criterium` | Z5: >20%, Z4: >25% | Sprint + anaerobic capacity |
+| `road_cycling` | `gran_fondo` | Z2–Z3: >60%, Z4: >15% | Sustained endurance + FTP |
+| `road_cycling` | `century` | Z2–Z3: >65% combined | Sustained aerobic |
+| `mtb` | `xco` | Z4–Z5: >50% combined | Punchy VO2max (5–30 sec efforts) |
+| `mtb` | `enduro` | Z3–Z4: >40%, Z5 bursts: >10% | Threshold + punchy climbs |
+
+Derive a per-zone numeric target from each profile descriptor (use the midpoint of any range as the target). For zones not explicitly listed, distribute the remaining percentage proportionally across them.
+
+Store as `expectedProfile = { description: "<key descriptor>", dominantZones: "<zones>", zoneTargets: { pctZ1, pctZ2, pctZ3, pctZ4, pctZ5 } }`.
+
+---
+
+#### Step 3 — Score the intensity gap
+
+**Compute match score:**
+
+For each zone Z1–Z5, compute `|actual% − expected%|`. Sum all five absolute differences → `totalDeviation`.
+
+| `totalDeviation` | Score |
+|---|---|
+| ≤ 20 percentage points | `on_track` → 🟢 On Track |
+| 20–40 percentage points | `gap` → 🟡 Gap |
+| > 40 percentage points | `risk` → 🔴 Risk |
+
+**Phase-intensity alignment check:**
+
+Inspect `trainingBlock.currentPhase` and compare against the race-type intensity demands:
+
+- If phase is `Base` and `(pctZ4 + pctZ5) > 30` for a `marathon` runner → set `phaseAlignmentNote`: "Higher than typical intensity for base phase marathon training."
+- If phase is `Peak` and `(pctZ4 + pctZ5) < 20` for a `5k` or `mile` runner → set `phaseAlignmentNote`: "Intensity may be too low for peak phase 5K/mile preparation."
+- If phase is `Taper` → set `phaseAlignmentNote = null` (no intensity flag; taper naturally reduces all zone work).
+- Otherwise → set `phaseAlignmentNote = null`.
+
+**TP enrichment cross-reference:**
+
+If `tpEnrichment?.available` is true, scan coach workout prescriptions for the recent training block. If coach notes indicate high-intensity sessions were planned and the athlete completed them, append to `phaseAlignmentNote` (or set it if null): "High Z4–Z5 training appears intentional per coach prescription."
+
+---
+
+#### Step 4 — Store result
+
+Store as `gapScores.intensity`:
+
+```json
+{
+  "score": "on_track" | "gap" | "risk" | null,
+  "trainingDistribution": { "pctZ1": <n>, "pctZ2": <n>, "pctZ3": <n>, "pctZ4": <n>, "pctZ5": <n> } | null,
+  "expectedProfile": { "description": "<key descriptor>", "dominantZones": "<zones>" },
+  "totalDeviation": <number | null>,
+  "phaseAlignmentNote": "<string>" | null,
+  "reason": null
+}
+```
+
+Display one line summarizing the result. Examples:
+- "⚡ Intensity: 🟢 On Track — training distribution aligns well with half marathon threshold demands."
+- "⚡ Intensity: 🟡 Gap — training is 45% Z2 aerobic; marathon pace requires more Z3 threshold work."
+- "⚡ Intensity: 🔴 Risk — 5K preparation requires Z4–Z5 emphasis; current block is heavily aerobic (Z1–Z2: 72%)."
+- "⚡ Intensity: *No HR zone data available in recent activities.*"
 
 ---
 

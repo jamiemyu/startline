@@ -1732,7 +1732,106 @@ Fill in all template placeholders with real values from working context before w
 
 For any dimension where data was unavailable, render the gap analysis row with the grey `na` pill and include the `reason` field from the gap score object as the detail text. Do not omit the row.
 
-### Step 5 — Save and confirm
+### Step 5 — Append Section 8: Training Recommendation Cards
+
+After Section 7, append a Section 8 block to the HTML report body with the heading **"🎯 Training Recommendations"** and subtitle **"Sorted by urgency (gap severity × weeks remaining)"**.
+
+#### Card generation logic
+
+For each gap dimension (`distance`, `elevation`, `terrain`, `intensity`, `temperature`), examine its `score` value from the gap scores object:
+
+- `score === "gap"` or `score === "risk"` → generate at least one recommendation card for this dimension.
+- `score === "on_track"` → generate a Low-priority maintenance card **only if** there are fewer than 5 gap/risk cards total; otherwise skip.
+- `score === null` / dimension was skipped → no card.
+
+Additionally, if `gapScores.distance.taperRisk === true`, generate a separate **Recovery & Taper** card regardless of the distance score.
+
+**Card ordering:** Sort all cards by `gapSeverity × weeksRemaining` descending before rendering:
+- `gapSeverity`: risk = 3, gap = 2, on_track = 1, taperRisk always treated as 3
+- `weeksRemaining`: use `raceConfig.weeksToRace`
+
+Higher product → card appears first.
+
+#### Card content lookup by dimension
+
+Use the following table to select card content based on the athlete's sport, race type, and gap dimension.
+
+**Distance gap:**
+- Half Marathon / Marathon / Ultra: category `"Long Efforts"`, gap context `"Closes your distance gap — build weekly volume and extend your long effort progressively"`, example session types: progressive long runs; back-to-back weekend runs (ultra only); race-pace long runs
+- Gran Fondo / Century: category `"Endurance Rides"`, example session types: long steady rides; progressive centuries; back-to-back riding days
+
+**Elevation gap:**
+- Running sports: category `"Climbing / Vertical Work"`, gap context `"Race demands significantly more elevation than your training average"`, example session types: hill repeats; hilly long runs; sustained climb intervals
+- Cycling sports: category `"Climbing Work"`, example session types: hill repeats on the bike; FTP climbing intervals; long climbs
+
+**Terrain gap:**
+- MTB: category `"Technical Terrain Exposure"`, gap context `"Race course is more technical than your training terrain"`, example session types: trail riding on technical singletracks; rock gardens; rooted descents
+- Running (trail/technical race): category `"Trail Running"`, gap context `"Race is on trail/technical terrain — more trail runs needed"`, example session types: trail long runs; technical trail efforts; hiking poles practice (ultra)
+
+**Intensity gap:**
+- High-intensity race types (5K, 10K, mile, criterium, XCO): category `"Speed & Intensity Work"`, gap context `"Race demands more high-zone intensity than your current training"`, example session types: VO2max intervals; track repeats; short hard efforts
+- Threshold race types (half marathon, marathon, gran fondo): category `"Threshold Training"`, gap context `"Build time at race-pace effort (Z3–Z4)"`, example session types: tempo runs/rides; lactate threshold intervals; race-pace miles
+- Aerobic race types (ultra, century): category `"Aerobic Base"`, example session types: easy long efforts; Z2 base building; back-to-back days
+
+**Temperature gap:**
+- Heat gap (race day significantly warmer than training environment): category `"Heat Adaptation"`, gap context `"Race day is significantly warmer than your training environment"`, example session types: heat acclimation runs (midday or layered clothing); sauna sessions post-workout; early-morning heat exposure
+- Cold gap (race day colder than training environment): category `"Cold Weather Prep"`, example session types: cold-weather long runs; layering practice; cold-start workouts
+
+**Taper risk card** (when `gapScores.distance.taperRisk === true`):
+- Category `"Recovery & Taper"`, priority always 🔴 High, gap context `"Your most recent long effort was too close to race day — prioritize rest and recovery"`, example session types: easy shakeout runs only; sleep and nutrition focus; no new hard efforts
+
+#### Card HTML structure
+
+Render each card as a `<div>` with the following structure and styles:
+
+```html
+<div style="background:#faf7f2; border:1px solid rgba(0,0,0,0.07); border-radius:12px; padding:16px;">
+  <!-- Category name: bold, #1c1814, DM Sans -->
+  <div style="font-family:'DM Sans',sans-serif; font-weight:700; color:#1c1814; margin-bottom:6px;">
+    [Category Name]
+  </div>
+  <!-- Priority badge: pill shape -->
+  <span style="display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:600; margin-bottom:10px;
+    background: [badge-bg]; color: [badge-color];">
+    [🔴 High | 🟡 Medium | 🟢 Low]
+  </span>
+  <!-- Gap context sentence: muted text -->
+  <p style="font-family:'DM Sans',sans-serif; color:#a09080; font-size:14px; margin:0 0 10px;">
+    [Gap context sentence]
+  </p>
+  <!-- Example session types: 2–3 bullets, inspiration only -->
+  <ul style="font-family:'DM Sans',sans-serif; color:#1c1814; font-size:14px; margin:0; padding-left:18px;">
+    <li>[Example 1]</li>
+    <li>[Example 2]</li>
+    <li>[Example 3 if applicable]</li>
+  </ul>
+</div>
+```
+
+**Priority badge colour mapping:**
+- 🔴 High (risk or taperRisk): background `#fde8e8`, color `#c0392b`
+- 🟡 Medium (gap): background `#fef3cd`, color `#856404`
+- 🟢 Low (on_track maintenance): background `#d4edda`, color `#155724`
+
+Wrap all cards in a responsive CSS grid container:
+
+```html
+<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:16px;">
+  <!-- cards here -->
+</div>
+```
+
+Below the grid, render this footnote in small italic text:
+
+> *Recommendations are category-level only — specific workout design belongs to your coach.*
+
+#### Full section wrapper
+
+Wrap the section heading, subtitle, card grid, and footnote in a `<section>` with consistent report styling (e.g., `max-width:860px; margin:40px auto; padding:0 24px`).
+
+---
+
+### Step 6 — Save and confirm
 
 After writing the file, tell the athlete:
 
